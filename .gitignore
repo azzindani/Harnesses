@@ -1,0 +1,10 @@
+.env
+project/**
+!project/.gitkeep
+data/**
+!data/.gitkeep
+*.pyc
+__pycache__/
+.venv/
+.claude/
+/tmp/
