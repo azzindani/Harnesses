@@ -1,0 +1,192 @@
+name: harnesses
+
+# Build the base image first so per-harness `FROM harness-base:latest` works:
+#   docker compose build harness-base
+# Then bring everything up:
+#   docker compose up -d auth                  # always-on
+# The 13 harness services live under the `on-demand` profile so they do not
+# auto-start.  The auth service starts them on first authenticated request and
+# stops them after IDLE_TIMEOUT_MIN minutes idle.
+
+x-harness-defaults: &harness-defaults
+  restart: "no"
+  profiles: ["on-demand"]
+  env_file: .env
+  volumes:
+    - ./project:/workspace
+    - ./data:/workspace/data
+  networks:
+    - harnesses_net
+
+# All vars come from .env via env_file; the anchors below just rename them
+# into the conventional SDK env names per protocol family.
+x-anthropic-env: &anthropic-env
+  ANTHROPIC_BASE_URL: ${PROVIDER_ANTHROPIC_URL}
+  ANTHROPIC_API_KEY: ${PROVIDER_API_KEY}
+  ANTHROPIC_CUSTOM_MODEL_OPTION: ${MODEL_NAME}
+  ANTHROPIC_DEFAULT_HAIKU_MODEL: ${MODEL_NAME}
+  ANTHROPIC_DEFAULT_SONNET_MODEL: ${MODEL_NAME}
+  ANTHROPIC_DEFAULT_OPUS_MODEL: ${MODEL_NAME}
+  CLAUDE_CODE_SUBAGENT_MODEL: ${MODEL_NAME}
+
+x-openai-env: &openai-env
+  OPENAI_API_BASE: ${PROVIDER_BASE_URL}
+  OPENAI_BASE_URL: ${PROVIDER_BASE_URL}
+  OPENAI_API_KEY: ${PROVIDER_API_KEY}
+  # Goose reads OPENAI_HOST as host-without-/v1; strip the suffix.
+  OPENAI_HOST: ${PROVIDER_ANTHROPIC_URL}
+
+services:
+  # Hidden image-only service so `docker compose build harness-base` works.
+  # No container is ever created (profile is unreachable in normal use).
+  harness-base:
+    image: harness-base:latest
+    build:
+      context: ./harnesses/base
+    profiles: ["build-only"]
+    command: ["true"]
+
+  auth:
+    build: ./auth
+    image: harnesses-auth:latest
+    container_name: harnesses-auth
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      IDLE_TIMEOUT_MIN: ${IDLE_TIMEOUT_MIN:-30}
+      HARNESS_BASE_DOMAIN: ${HARNESS_BASE_DOMAIN:-lab.casava.space}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - harnesses_net
+
+  harness-claude-code:
+    <<: *harness-defaults
+    build: ./harnesses/claude-code
+    image: harness-claude-code:latest
+    container_name: harness-claude-code
+    environment:
+      <<: *anthropic-env
+
+  harness-aider:
+    <<: *harness-defaults
+    build: ./harnesses/aider
+    image: harness-aider:latest
+    container_name: harness-aider
+    environment:
+      <<: *openai-env
+      MODEL_NAME: ${MODEL_NAME}
+
+  harness-opencode:
+    <<: *harness-defaults
+    build: ./harnesses/opencode
+    image: harness-opencode:latest
+    container_name: harness-opencode
+    environment:
+      <<: *openai-env
+      MODEL_NAME: ${MODEL_NAME}
+
+  harness-crush:
+    <<: *harness-defaults
+    build: ./harnesses/crush
+    image: harness-crush:latest
+    container_name: harness-crush
+    environment:
+      <<: *openai-env
+      MODEL_NAME: ${MODEL_NAME}
+
+  harness-gptme:
+    <<: *harness-defaults
+    build: ./harnesses/gptme
+    image: harness-gptme:latest
+    container_name: harness-gptme
+    environment:
+      <<: *openai-env
+      MODEL_NAME: ${MODEL_NAME}
+
+  harness-goose:
+    <<: *harness-defaults
+    build: ./harnesses/goose
+    image: harness-goose:latest
+    container_name: harness-goose
+    environment:
+      <<: *openai-env
+      MODEL_NAME: ${MODEL_NAME}
+
+  harness-plandex:
+    <<: *harness-defaults
+    build: ./harnesses/plandex
+    image: harness-plandex:latest
+    container_name: harness-plandex
+    environment:
+      <<: *openai-env
+      MODEL_NAME: ${MODEL_NAME}
+
+  harness-qwencode:
+    <<: *harness-defaults
+    build: ./harnesses/qwencode
+    image: harness-qwencode:latest
+    container_name: harness-qwencode
+    environment:
+      <<: *openai-env
+      MODEL_NAME: ${MODEL_NAME}
+
+  harness-openhands:
+    <<: *harness-defaults
+    build: ./harnesses/openhands
+    image: harness-openhands:latest
+    container_name: harness-openhands
+    # OpenHands itself launches sandbox containers — needs the docker socket.
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      LLM_BASE_URL: ${PROVIDER_BASE_URL}
+      LLM_MODEL: openai/${MODEL_NAME}
+      LLM_API_KEY: ${PROVIDER_API_KEY}
+      SANDBOX_RUNTIME_CONTAINER_IMAGE: ghcr.io/all-hands-ai/runtime:0.20-nikolaik
+      WORKSPACE_MOUNT_PATH: ${PWD}/project
+
+  harness-kilocode:
+    <<: *harness-defaults
+    build: ./harnesses/kilocode
+    image: harness-kilocode:latest
+    container_name: harness-kilocode
+    environment:
+      MODEL_NAME: ${MODEL_NAME}
+      PUID: "1000"
+      PGID: "1000"
+      TZ: UTC
+
+  harness-codex:
+    <<: *harness-defaults
+    build: ./harnesses/codex
+    image: harness-codex:latest
+    container_name: harness-codex
+    environment:
+      <<: *openai-env
+      MODEL_NAME: ${MODEL_NAME}
+
+  harness-pi:
+    <<: *harness-defaults
+    build: ./harnesses/pi
+    image: harness-pi:latest
+    container_name: harness-pi
+    environment:
+      <<: *openai-env
+      MODEL_NAME: ${MODEL_NAME}
+
+  harness-droid:
+    <<: *harness-defaults
+    build: ./harnesses/droid
+    image: harness-droid:latest
+    container_name: harness-droid
+    environment:
+      <<: *anthropic-env
+
+networks:
+  harnesses_net:
+    name: harnesses_net
+    driver: bridge

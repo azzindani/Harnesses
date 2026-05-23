@@ -1,0 +1,140 @@
+# ── Harnesses lab ─────────────────────────────────────────────────────────────
+# Append this block to /root/caddy-router/Caddyfile.
+#
+# DNS:  wildcard A record  *.lab.casava.space  →  this VPS
+#
+# Auth flow per harness:
+#   1. Visitor opens  https://<harness>.lab.casava.space/?token=<JWT>
+#   2. @hastoken handler rewrites to /issue and proxies to harnesses-auth.
+#      Auth validates the JWT, sets a host-scoped HttpOnly cookie, redirects
+#      back to /  (so the URL bar stops showing the secret).
+#   3. Subsequent requests fall through to `forward_auth` which calls
+#      auth /verify?harness=<name>.  Auth validates the cookie AND ensures
+#      the container is running (cold-start blocks 3-7s).
+#   4. On 200, Caddy proxies to the harness container by service name.
+#
+# Reload after editing:
+#   docker exec caddy-router caddy reload --config /etc/caddy/Caddyfile
+
+(harness_auth) {
+    @hastoken query token=*
+    handle @hastoken {
+        rewrite * /issue
+        reverse_proxy harnesses-auth:8080 {
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    forward_auth harnesses-auth:8080 {
+        uri /verify?harness={args[0]}
+        copy_headers Cookie
+    }
+}
+
+claude-code.lab.casava.space {
+    import harness_auth claude-code
+    reverse_proxy harness-claude-code:7681 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
+
+aider.lab.casava.space {
+    import harness_auth aider
+    reverse_proxy harness-aider:7681 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
+
+opencode.lab.casava.space {
+    import harness_auth opencode
+    reverse_proxy harness-opencode:7681 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
+
+crush.lab.casava.space {
+    import harness_auth crush
+    reverse_proxy harness-crush:7681 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
+
+gptme.lab.casava.space {
+    import harness_auth gptme
+    reverse_proxy harness-gptme:7681 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
+
+goose.lab.casava.space {
+    import harness_auth goose
+    reverse_proxy harness-goose:7681 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
+
+plandex.lab.casava.space {
+    import harness_auth plandex
+    reverse_proxy harness-plandex:7681 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
+
+qwencode.lab.casava.space {
+    import harness_auth qwencode
+    reverse_proxy harness-qwencode:7681 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
+
+# OpenHands serves its own web UI on :3000 (no ttyd).
+openhands.lab.casava.space {
+    import harness_auth openhands
+    reverse_proxy harness-openhands:3000 {
+        flush_interval -1
+        header_up Host {host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+
+# Kilo Code = code-server with the extension preinstalled (:8080).
+kilocode.lab.casava.space {
+    import harness_auth kilocode
+    reverse_proxy harness-kilocode:8080 {
+        flush_interval -1
+        header_up Host {host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}
+
+codex.lab.casava.space {
+    import harness_auth codex
+    reverse_proxy harness-codex:7681 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
+
+pi.lab.casava.space {
+    import harness_auth pi
+    reverse_proxy harness-pi:7681 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
+
+droid.lab.casava.space {
+    import harness_auth droid
+    reverse_proxy harness-droid:7681 {
+        flush_interval -1
+        header_up Host {host}
+    }
+}
