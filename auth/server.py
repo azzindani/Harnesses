@@ -20,6 +20,7 @@ plugin-free substitute — same effect for a personal lab, simpler to deploy.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import socket
@@ -27,10 +28,11 @@ import time
 from typing import Optional
 
 import docker
+import httpx
 import jwt
 from docker.errors import NotFound
 from fastapi import FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
@@ -172,3 +174,140 @@ async def _idle_sweep() -> None:
 @app.on_event("startup")
 async def _startup() -> None:
     asyncio.create_task(_idle_sweep())
+
+
+# ── OpenRouter Anthropic-compat proxy ─────────────────────────────────────────
+# Claude Code (and Droid) send Anthropic /v1/messages requests and expect the
+# response content array to be just `[{type: text, …}]`.  OpenRouter on most
+# free models wraps the response with `thinking` and `redacted_thinking`
+# blocks, which Claude Code's content accumulator handles incorrectly —
+# `result` ends up empty even though the model said something useful.
+#
+# This proxy sits between those harnesses and OpenRouter:
+#   1. injects `reasoning: {exclude: true}` into the request body, asking
+#      OpenRouter not to emit thinking blocks at all
+#   2. for streaming responses, drops any SSE events for thinking content
+#      blocks that slip through anyway
+#
+# Harnesses point at it via `ANTHROPIC_BASE_URL=http://harnesses-auth:8080/anthropic`.
+# The proxy forwards to OpenRouter's Anthropic-compat endpoint.
+
+OPENROUTER_ANTHROPIC = "https://openrouter.ai/api/v1/messages"
+_PROXY_CLIENT = httpx.AsyncClient(timeout=httpx.Timeout(300.0))
+
+
+def _strip_thinking(payload: dict) -> dict:
+    """Remove thinking/redacted_thinking blocks from a non-streamed response."""
+    if isinstance(payload.get("content"), list):
+        payload["content"] = [
+            c for c in payload["content"]
+            if c.get("type") not in ("thinking", "redacted_thinking")
+        ]
+    return payload
+
+
+async def _stream_filter(upstream: httpx.Response):
+    """Iterate the upstream SSE stream and drop thinking-block events.
+
+    SSE events arrive as `event: <name>\\ndata: <json>\\n\\n` triples; we have
+    to buffer the event-line so we can drop or pass it together with its
+    data-line, otherwise the consumer gets orphaned `event: ...` lines without
+    matching data and complains.
+    """
+    pending_event = None
+    drop = False
+    async for raw_line in upstream.aiter_lines():
+        if not raw_line:
+            if pending_event is not None:
+                yield pending_event + "\n"
+                pending_event = None
+            yield "\n"
+            continue
+        if raw_line.startswith("event: "):
+            pending_event = raw_line
+            continue
+        if raw_line.startswith("data: "):
+            payload = raw_line[6:]
+            try:
+                obj = json.loads(payload)
+            except json.JSONDecodeError:
+                if pending_event is not None:
+                    yield pending_event + "\n"
+                    pending_event = None
+                yield raw_line + "\n"
+                continue
+            t = obj.get("type")
+            if t == "content_block_start":
+                block_type = (obj.get("content_block") or {}).get("type")
+                if block_type in ("thinking", "redacted_thinking"):
+                    drop = True
+                    pending_event = None
+                    continue
+            elif t in ("content_block_delta", "content_block_stop") and drop:
+                if t == "content_block_stop":
+                    drop = False
+                pending_event = None
+                continue
+            if pending_event is not None:
+                yield pending_event + "\n"
+                pending_event = None
+            yield raw_line + "\n"
+        else:
+            if pending_event is not None:
+                yield pending_event + "\n"
+                pending_event = None
+            yield raw_line + "\n"
+
+
+@app.api_route("/anthropic/v1/messages", methods=["POST"])
+async def proxy_messages(request: Request) -> Response:
+    body = await request.body()
+    try:
+        payload = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="invalid JSON")
+
+    # Tell OpenRouter not to emit reasoning content.  This is the body-level
+    # equivalent of OpenAI's `extra_body={"reasoning": {"exclude": True}}`.
+    payload.setdefault("reasoning", {})["exclude"] = True
+
+    # Pass through caller headers (Authorization, anthropic-version, etc.) but
+    # drop hop-by-hop headers that httpx will set itself.
+    fwd_headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in ("host", "content-length", "connection", "accept-encoding")
+    }
+
+    streaming = bool(payload.get("stream"))
+    upstream_request = _PROXY_CLIENT.build_request(
+        "POST", OPENROUTER_ANTHROPIC, json=payload, headers=fwd_headers,
+    )
+
+    if streaming:
+        upstream = await _PROXY_CLIENT.send(upstream_request, stream=True)
+        if upstream.status_code >= 400:
+            text = await upstream.aread()
+            await upstream.aclose()
+            return Response(content=text, status_code=upstream.status_code,
+                            media_type=upstream.headers.get("content-type", "application/json"))
+        async def gen():
+            try:
+                async for chunk in _stream_filter(upstream):
+                    yield chunk.encode()
+            finally:
+                await upstream.aclose()
+        return StreamingResponse(gen(), status_code=upstream.status_code,
+                                 media_type="text/event-stream")
+
+    upstream = await _PROXY_CLIENT.send(upstream_request)
+    if upstream.status_code >= 400:
+        return Response(content=upstream.content, status_code=upstream.status_code,
+                        media_type=upstream.headers.get("content-type", "application/json"))
+    try:
+        data = upstream.json()
+        data = _strip_thinking(data)
+        return Response(content=json.dumps(data), status_code=200,
+                        media_type="application/json")
+    except Exception:
+        return Response(content=upstream.content, status_code=upstream.status_code,
+                        media_type=upstream.headers.get("content-type", "application/json"))

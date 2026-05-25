@@ -1,6 +1,14 @@
 #!/bin/sh
 set -e
 
+# Crush has a built-in `openai` provider that activates whenever OPENAI_API_KEY
+# is set in the environment.  Our compose anchors set OPENAI_API_KEY (so other
+# harnesses work), but crush then sends our OpenRouter key to api.openai.com
+# instead of honouring crush.json's `lab` provider.  Strip the OPENAI_* env
+# vars in this container only — the `lab` provider in crush.json carries
+# everything crush actually needs.
+unset OPENAI_API_KEY OPENAI_API_BASE OPENAI_BASE_URL OPENAI_HOST
+
 mkdir -p /workspace
 cat > /workspace/crush.json <<EOF
 {
