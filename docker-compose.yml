@@ -21,7 +21,10 @@ x-harness-defaults: &harness-defaults
 # All vars come from .env via env_file; the anchors below just rename them
 # into the conventional SDK env names per protocol family.
 x-anthropic-env: &anthropic-env
-  ANTHROPIC_BASE_URL: ${PROVIDER_ANTHROPIC_URL}
+  # Route via the auth service's /anthropic proxy: it injects
+  # reasoning.exclude=true so OpenRouter doesn't return thinking blocks
+  # (which Claude Code's content accumulator handles incorrectly).
+  ANTHROPIC_BASE_URL: http://harnesses-auth:8080/anthropic
   ANTHROPIC_API_KEY: ${PROVIDER_API_KEY}
   ANTHROPIC_CUSTOM_MODEL_OPTION: ${MODEL_NAME}
   ANTHROPIC_DEFAULT_HAIKU_MODEL: ${MODEL_NAME}
@@ -61,6 +64,50 @@ services:
     networks:
       - harnesses_net
 
+  # Self-hosted plandex backend so the harness-plandex CLI doesn't need a
+  # plandex.ai cloud account.  LOCAL_MODE=1 disables the auth/trial flow.
+  plandex-postgres:
+    image: postgres:16-alpine
+    container_name: plandex-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: plandex
+      POSTGRES_USER: plandex
+      POSTGRES_DB: plandex
+    volumes:
+      - plandex_db:/var/lib/postgresql/data
+    networks:
+      - harnesses_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plandex"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  plandex-server:
+    image: plandexai/plandex-server:latest
+    container_name: plandex-server
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://plandex:plandex@plandex-postgres:5432/plandex?sslmode=disable
+      GOENV: development           # required (with LOCAL_MODE) for /accounts to skip email verification
+      LOCAL_MODE: "1"
+      PLANDEX_BASE_DIR: /plandex-server
+      # plandex-server reads credentials by hard-coded env-var names — alias
+      # our generic PROVIDER_API_KEY into the provider-specific slots so the
+      # built-in model packs (--oss, --strong, etc.) and any custom models
+      # routed through OpenRouter can authenticate.
+      OPENROUTER_API_KEY: ${PROVIDER_API_KEY}
+    volumes:
+      - plandex_files:/plandex-server
+    networks:
+      - harnesses_net
+    depends_on:
+      plandex-postgres:
+        condition: service_healthy
+    command: ["/bin/sh", "-c", "/scripts/wait-for-it.sh plandex-postgres:5432 -- ./plandex-server"]
+
   harness-claude-code:
     <<: *harness-defaults
     build: ./harnesses/claude-code
@@ -92,8 +139,10 @@ services:
     build: ./harnesses/crush
     image: harness-crush:latest
     container_name: harness-crush
+    # Crush auto-activates its built-in OpenAI provider whenever OPENAI_API_KEY
+    # exists in env, ignoring crush.json's lab provider entirely.  Skip the
+    # openai-env anchor here so only PROVIDER_* (from env_file) is present.
     environment:
-      <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
 
   harness-gptme:
@@ -122,6 +171,17 @@ services:
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
+      # Point the CLI at our self-hosted server (LOCAL_MODE=1, no account).
+      PLANDEX_API_HOST: http://plandex-server:8099
+      # Plandex's CLI gate-keeps model-pack selection by checking for the
+      # provider-specific env var (OPENROUTER_API_KEY etc.) — alias our key.
+      OPENROUTER_API_KEY: ${PROVIDER_API_KEY}
+      # Do NOT set DEEPSEEK_API_KEY — plandex auto-routes through OpenRouter
+      # only when there's no provider-specific key.  Setting a non-DeepSeek
+      # key as DEEPSEEK_API_KEY makes LiteLLM call api.deepseek.com and fail.
+    depends_on:
+      plandex-server:
+        condition: service_started
 
   harness-qwencode:
     <<: *harness-defaults
@@ -185,8 +245,16 @@ services:
     container_name: harness-droid
     environment:
       <<: *anthropic-env
+      # FACTORY_API_KEY bypasses droid's interactive /login flow.  Any non-
+      # empty value works for BYOK mode; the actual API auth comes from the
+      # apiKey in ~/.factory/settings.json customModels.
+      FACTORY_API_KEY: byok-${PROVIDER_API_KEY:-not-used}
 
 networks:
   harnesses_net:
     name: harnesses_net
     driver: bridge
+
+volumes:
+  plandex_db:
+  plandex_files:
