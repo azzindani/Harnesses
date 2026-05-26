@@ -41,8 +41,15 @@ declare -A CMD=(
 ALL=( claude-code aider opencode crush gptme goose plandex qwencode openhands kilocode codex pi droid )
 TARGETS=( "$@" ); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=( "${ALL[@]}" )
 
-AUTH_IP=$(docker inspect harnesses-auth --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
-[ -n "$AUTH_IP" ] || { echo "harnesses-auth not running" >&2; exit 2; }
+# Guarantee always-on services are up before testing.  `docker compose up`
+# with --profile on-demand has been known to recreate no-profile services
+# (plandex-server, plandex-postgres) and leave them stopped — bring them back.
+docker compose up -d auth plandex-postgres plandex-server >/dev/null 2>&1 || true
+sleep 2
+
+AUTH_IP=$(docker inspect harnesses-auth --format '{{(index .NetworkSettings.Networks "harnesses_net").IPAddress}}')
+[ -n "$AUTH_IP" ] && [ "$AUTH_IP" != "<no value>" ] \
+    || { echo "harnesses-auth not running — run 'docker compose up -d auth' first" >&2; exit 2; }
 
 PASS=0; FAIL=0; SKIP=0
 printf '%-14s %-8s %-7s %s\n' HARNESS RESULT TIME NOTE
@@ -72,6 +79,7 @@ for h in "${TARGETS[@]}"; do
     # Plandex needs a multi-step flow because its stream UI requires a TTY:
     # create a plan with the --oss pack, submit via `tell --bg`, poll convo.
     if [ "$cmd" = "PLANDEX" ]; then
+        log="/tmp/infer-${h}.log"
         start=$(date +%s)
         docker exec "harness-${h}" sh -c '
             set -e
