@@ -103,17 +103,20 @@ def healthz() -> dict:
 
 
 @app.get("/issue")
-def issue(request: Request, harness: str = Query(...), token: str = Query(...)) -> Response:
+def issue(request: Request, token: str = Query(...)) -> Response:
     """Visited as `https://<harness>.<base>/?token=<jwt>` (Caddy rewrites here).
 
-    Validates the JWT, sets a host-scoped cookie, and 302-redirects to `/`
-    (without the token query) so the URL bar no longer shows the secret.
+    Derives the harness name from the Host header (everything before the
+    base domain), validates the JWT, sets a host-scoped cookie, and
+    302-redirects to `/` (without the token query) so the URL bar no longer
+    shows the secret.
     """
-    _decode(token, harness)
     host = request.headers.get("host", "").split(":")[0]
-    expected_host = f"{harness}.{BASE_DOMAIN}"
-    if host != expected_host:
-        raise HTTPException(status_code=400, detail=f"host {host} does not match harness {harness}")
+    suffix = "." + BASE_DOMAIN
+    if not host.endswith(suffix):
+        raise HTTPException(status_code=400, detail=f"host {host} does not match base domain {BASE_DOMAIN}")
+    harness = host[: -len(suffix)]
+    _decode(token, harness)
 
     resp = RedirectResponse(url="/", status_code=302)
     resp.set_cookie(
