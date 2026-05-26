@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+# The flagged strings are internal docker service URLs (host:port/path
+# components that look high-entropy to the generic-api-key detector).
+[[rules]]
+id = "generic-api-key"
+[rules.allowlist]
+regexTarget = "match"
+regexes = [
+    '''harnesses-auth:8080/anthropic''',
+]

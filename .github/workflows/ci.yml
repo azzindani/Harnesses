@@ -1,0 +1,77 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs of the same ref when a newer push lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint (shellcheck + python + secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck (entrypoints + test scripts)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          # Fail only on errors — warnings/info are advisory for this lab.
+          shellcheck -S error \
+            scripts/*.sh \
+            harnesses/*/entrypoint.sh
+
+      - name: python syntax check
+        run: |
+          python3 -m py_compile \
+            auth/server.py \
+            scripts/generate-tokens.py \
+            harnesses/pi/pi.py
+
+      - name: ruff (style + obvious bugs)
+        run: |
+          pip install --quiet ruff==0.8.0
+          # E,F = pycodestyle + pyflakes essentials.  Keep the rule set small;
+          # this is a lab, not a library.
+          ruff check --select=E,F --ignore=E501,E402 \
+            auth/ scripts/generate-tokens.py harnesses/pi/
+
+      - name: gitleaks (secret scan)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  validate:
+    name: validate (compose + Caddyfile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker compose config
+        run: |
+          # Use the placeholder .env.example so every ${VAR} resolves.
+          cp .env.example .env
+          docker compose config -q
+          # Also confirm the on-demand profile resolves (catches typos in
+          # service-level env interpolation that the default profile misses).
+          docker compose --profile on-demand config -q
+
+      - name: caddyfile validate (snippet)
+        run: |
+          # caddy-snippet.txt is meant to be appended to the shared
+          # /root/caddy-router/Caddyfile — it has no global block of its own.
+          # Wrap it in a minimal valid Caddyfile so `caddy validate` can parse.
+          cat > /tmp/Caddyfile <<'EOF'
+          {
+              email ci@example.com
+          }
+          EOF
+          cat caddy-snippet.txt >> /tmp/Caddyfile
+          docker run --rm -v /tmp:/work -w /work caddy:2-alpine \
+            caddy validate --config /work/Caddyfile --adapter caddyfile
