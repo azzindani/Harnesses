@@ -41,8 +41,14 @@ SKIP_PROC_CHECK="pi"
 ALL=( claude-code aider opencode crush gptme goose plandex qwencode openhands kilocode codex pi droid )
 TARGETS=( "$@" ); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=( "${ALL[@]}" )
 
-AUTH_IP=$(docker inspect harnesses-auth --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
-[ -n "$AUTH_IP" ] || { echo "harnesses-auth not running — run 'docker compose up -d auth' first" >&2; exit 2; }
+# Make sure always-on services are running (compose --profile commands have
+# been known to leave them stopped after a --force-recreate).
+docker compose up -d auth plandex-postgres plandex-server >/dev/null 2>&1 || true
+sleep 2
+
+AUTH_IP=$(docker inspect harnesses-auth --format '{{(index .NetworkSettings.Networks "harnesses_net").IPAddress}}')
+[ -n "$AUTH_IP" ] && [ "$AUTH_IP" != "<no value>" ] \
+    || { echo "harnesses-auth not running — run 'docker compose up -d auth' first" >&2; exit 2; }
 
 PASS=0; FAIL=0
 printf '%-14s %-10s %-8s %-12s %-14s %s\n' HARNESS WAKE PORT PROVIDER PROCESS NOTES
