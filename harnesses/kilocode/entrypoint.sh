@@ -1,4 +1,5 @@
 #!/usr/bin/with-contenv bash
+# shellcheck shell=bash
 set -e
 
 # Install Kilo Code extension if not already present.
