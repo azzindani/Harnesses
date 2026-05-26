@@ -23,7 +23,7 @@ except ImportError:
 
 
 HARNESSES = [
-    "claude-code",
+    "claude",
     "aider",
     "opencode",
     "crush",

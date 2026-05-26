@@ -24,7 +24,7 @@ PROMPT="Reply with exactly the four characters PONG and nothing else."
 # How to drive each harness in one-shot mode.  Empty value = no programmable
 # one-shot mode available; the test skips it and reports MANUAL.
 declare -A CMD=(
-  [claude-code]='claude -p "$PROMPT"'
+  [claude]='claude -p "$PROMPT"'
   [aider]='aider --no-stream --no-auto-commits --yes-always --message "$PROMPT" . </dev/null'
   [opencode]='opencode run "$PROMPT"'
   [crush]='crush run "$PROMPT"'
@@ -38,7 +38,7 @@ declare -A CMD=(
   [pi]='pi "$PROMPT"'
   [droid]=''                                            # factory.ai account login required (FACTORY_API_KEY)
 )
-ALL=( claude-code aider opencode crush gptme goose plandex qwencode openhands kilocode codex pi droid )
+ALL=( claude aider opencode crush gptme goose plandex qwencode openhands kilocode codex pi droid )
 TARGETS=( "$@" ); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=( "${ALL[@]}" )
 
 # Guarantee always-on services are up before testing.  `docker compose up`
