@@ -17,17 +17,29 @@
 #   docker exec caddy-router caddy reload --config /etc/caddy/Caddyfile
 
 (harness_auth) {
-    @hastoken query token=*
-    handle @hastoken {
-        rewrite * /issue
-        reverse_proxy harnesses-auth:8080 {
-            header_up X-Forwarded-Host {host}
+    # Explicit route { } so directives execute in source order — without it,
+    # Caddy's auto-order puts forward_auth BEFORE the @hastoken handler and
+    # the `?token=…` first-visit flow never fires.
+    route {
+        @hastoken query token=*
+        handle @hastoken {
+            rewrite * /issue
+            reverse_proxy harnesses-auth:8080
         }
-    }
 
-    forward_auth harnesses-auth:8080 {
-        uri /verify?harness={args[0]}
-        copy_headers Cookie
+        forward_auth harnesses-auth:8080 {
+            uri /verify?harness={args[0]}
+            copy_headers Cookie
+            # ttyd uses WebSockets; without stripping the upgrade headers
+            # uvicorn rejects the /verify GET with 400 Bad Request and Caddy
+            # then 403s the WS upgrade to the user's browser.
+            header_up -Connection
+            header_up -Upgrade
+            header_up -Sec-Websocket-Version
+            header_up -Sec-Websocket-Key
+            header_up -Sec-Websocket-Protocol
+            header_up -Sec-Websocket-Extensions
+        }
     }
 }
 
