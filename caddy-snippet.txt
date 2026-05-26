@@ -31,9 +31,9 @@
     }
 }
 
-claude-code.lab.casava.space {
-    import harness_auth claude-code
-    reverse_proxy harness-claude-code:7681 {
+claude.lab.casava.space {
+    import harness_auth claude
+    reverse_proxy harness-claude:7681 {
         flush_interval -1
         header_up Host {host}
     }

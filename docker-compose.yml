@@ -108,11 +108,11 @@ services:
         condition: service_healthy
     command: ["/bin/sh", "-c", "/scripts/wait-for-it.sh plandex-postgres:5432 -- ./plandex-server"]
 
-  harness-claude-code:
+  harness-claude:
     <<: *harness-defaults
-    build: ./harnesses/claude-code
-    image: harness-claude-code:latest
-    container_name: harness-claude-code
+    build: ./harnesses/claude
+    image: harness-claude:latest
+    container_name: harness-claude
     environment:
       <<: *anthropic-env
 
