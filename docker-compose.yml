@@ -61,6 +61,11 @@ services:
       HARNESS_BASE_DOMAIN: ${HARNESS_BASE_DOMAIN:-lab.casava.space}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Bind-mount .env so the auth service can auto-fill empty TOKEN_*= lines
+      # at startup and log the login URL for every harness.  RW because the
+      # autofill writes regenerated tokens back so the operator can copy them
+      # from .env directly (instead of having to read docker logs).
+      - ./.env:/app/.env:rw
     networks:
       - harnesses_net
 
