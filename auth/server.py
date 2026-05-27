@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import socket
 import time
 
@@ -42,6 +43,15 @@ CONTAINER_PREFIX = "harness-"
 HARNESS_PORT = 7681  # ttyd default; OpenHands/Kilo override below
 HARNESS_PORT_OVERRIDES = {"openhands": 3000, "kilocode": 8080}
 COLD_START_TIMEOUT_S = 30
+TOKEN_TTL_DAYS = 30
+
+# Mirrored from scripts/generate-tokens.py so the auth service can self-issue
+# tokens at startup (avoids running the script as a separate step).
+HARNESSES = [
+    "claude", "aider", "opencode", "crush", "gptme", "goose", "plandex",
+    "qwencode", "openhands", "kilocode", "codex", "pi", "droid",
+]
+ENV_FILE = "/app/.env"  # bind-mounted from host docker-compose.yml
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("harness-auth")
@@ -173,8 +183,84 @@ async def _idle_sweep() -> None:
             last_seen.pop(harness, None)
 
 
+def _sign_token(harness: str) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {"harness": harness, "iat": now, "exp": now + TOKEN_TTL_DAYS * 86400},
+        JWT_SECRET,
+        algorithm=JWT_ALG,
+    )
+
+
+def _token_valid(token: str, harness: str) -> bool:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except jwt.PyJWTError:
+        return False
+    return payload.get("harness") == harness
+
+
+def _autofill_tokens_and_log_urls() -> None:
+    """Fill empty/invalid TOKEN_*= lines in .env, then log a URL per harness.
+
+    Tokens are stateless — the auth service only needs JWT_SECRET to validate
+    anything signed with it.  Writing tokens back to .env is purely for the
+    operator's convenience: a stable place to copy-paste the login URL from.
+    On every startup we (a) regenerate any missing or no-longer-valid token,
+    and (b) log the full `https://<harness>.<base>/?token=<jwt>` URL so the
+    operator can grab one from `docker logs harnesses-auth` without running
+    a separate script.
+    """
+    tokens: dict[str, str] = {}
+    env_lines: list[str] | None = None
+    if os.path.exists(ENV_FILE):
+        try:
+            with open(ENV_FILE) as f:
+                env_lines = f.readlines()
+        except OSError as e:
+            log.warning("could not read %s: %s", ENV_FILE, e)
+
+    if env_lines is not None:
+        changed = False
+        for i, line in enumerate(env_lines):
+            m = re.match(r"^(TOKEN_([A-Z_]+))=(.*)$", line.rstrip("\n"))
+            if not m:
+                continue
+            harness = m.group(2).lower()
+            if harness not in HARNESSES:
+                continue
+            value = m.group(3).strip()
+            if not value or not _token_valid(value, harness):
+                value = _sign_token(harness)
+                env_lines[i] = f"TOKEN_{m.group(2)}={value}\n"
+                changed = True
+                log.info("auto-filled TOKEN_%s in .env", m.group(2))
+            tokens[harness] = value
+        if changed:
+            try:
+                with open(ENV_FILE, "w") as f:
+                    f.writelines(env_lines)
+            except OSError as e:
+                log.warning("could not write %s (token autofill skipped): %s", ENV_FILE, e)
+    else:
+        log.warning("%s not present; logging URLs without persisting tokens", ENV_FILE)
+
+    # Make sure every harness has at least an in-memory token to log a URL for.
+    for h in HARNESSES:
+        tokens.setdefault(h, _sign_token(h))
+
+    sep = "=" * 78
+    log.info(sep)
+    log.info("Harness login URLs (30-day tokens; open in browser):")
+    log.info(sep)
+    for h in HARNESSES:
+        log.info("  https://%s.%s/?token=%s", h, BASE_DOMAIN, tokens[h])
+    log.info(sep)
+
+
 @app.on_event("startup")
 async def _startup() -> None:
+    _autofill_tokens_and_log_urls()
     asyncio.create_task(_idle_sweep())
 
 
