@@ -1,15 +1,14 @@
 #!/bin/sh
 set -e
 
-# Anthropic-compatible provider.  All *_MODEL aliases must point at the model
-# the provider serves — leaving even one unset triggers 404s mid-session.
-export ANTHROPIC_BASE_URL="${PROVIDER_ANTHROPIC_URL}"
-export ANTHROPIC_API_KEY="${PROVIDER_API_KEY:-not-used}"
-export ANTHROPIC_CUSTOM_MODEL_OPTION="${MODEL_NAME}"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="${MODEL_NAME}"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="${MODEL_NAME}"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="${MODEL_NAME}"
-export CLAUDE_CODE_SUBAGENT_MODEL="${MODEL_NAME}"
+# All ANTHROPIC_* env vars come from docker-compose's x-anthropic-env anchor:
+#   - ANTHROPIC_BASE_URL points at the harnesses-auth proxy (strips thinking
+#     blocks before they confuse Claude Code's content accumulator)
+#   - ANTHROPIC_AUTH_TOKEN (not _API_KEY!) bypasses the OAuth login flow
+#   - ANTHROPIC_DEFAULT_* aliases route every model tier to the one model NIM
+#     actually serves; missing any alias triggers 404s mid-session.
+# Re-exporting them here would *override* the proxy URL with the direct
+# provider URL and re-add API_KEY, both of which break the harness.
 
 tmux new-session -d -s main -c /workspace
 tmux send-keys -t main "claude" Enter

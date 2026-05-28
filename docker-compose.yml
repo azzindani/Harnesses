@@ -25,7 +25,12 @@ x-anthropic-env: &anthropic-env
   # reasoning.exclude=true so OpenRouter doesn't return thinking blocks
   # (which Claude Code's content accumulator handles incorrectly).
   ANTHROPIC_BASE_URL: http://harnesses-auth:8080/anthropic
-  ANTHROPIC_API_KEY: ${PROVIDER_API_KEY}
+  # Claude Code 2.x: ANTHROPIC_API_KEY *triggers* the Anthropic OAuth login
+  # flow (the SDK treats it as "I have an Anthropic-issued key, validate it").
+  # ANTHROPIC_AUTH_TOKEN is the bearer-style override that says "I'm pointed
+  # at a non-Anthropic endpoint, send this Authorization header verbatim".
+  # Setting AUTH_TOKEN bypasses the interactive login screen.
+  ANTHROPIC_AUTH_TOKEN: ${PROVIDER_API_KEY}
   ANTHROPIC_CUSTOM_MODEL_OPTION: ${MODEL_NAME}
   ANTHROPIC_DEFAULT_HAIKU_MODEL: ${MODEL_NAME}
   ANTHROPIC_DEFAULT_SONNET_MODEL: ${MODEL_NAME}
