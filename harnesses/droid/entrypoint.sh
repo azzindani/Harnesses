@@ -29,4 +29,4 @@ tmux new-session -d -s main -c /workspace
 # `-m lab-anthropic` selects our custom model entry; --auto low restricts
 # autonomy to read-only ops (safe default for a fresh session).
 tmux send-keys -t main "droid -m lab-anthropic" Enter
-exec ttyd --port 7681 --writable --check-origin=false tmux attach-session -t main
+exec ttyd --port 7681 --writable --check-origin=false -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main
