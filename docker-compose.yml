@@ -63,6 +63,7 @@ services:
     environment:
       JWT_SECRET: ${JWT_SECRET}
       IDLE_TIMEOUT_MIN: ${IDLE_TIMEOUT_MIN:-30}
+      RETENTION_DAYS: ${RETENTION_DAYS:-7}
       HARNESS_BASE_DOMAIN: ${HARNESS_BASE_DOMAIN:-lab.casava.space}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -71,6 +72,11 @@ services:
       # autofill writes regenerated tokens back so the operator can copy them
       # from .env directly (instead of having to read docker logs).
       - ./.env:/app/.env:rw
+      # Persisted state — multi-instance metadata (last seen, pinned flag,
+      # creation time) survives auth-service restarts.  Without this, every
+      # restart would lose track of which dynamic instances exist and the
+      # retention sweep would forget what to clean up.
+      - harnesses_data:/data
     networks:
       - harnesses_net
 
@@ -268,3 +274,6 @@ networks:
 volumes:
   plandex_db:
   plandex_files:
+  # Persisted auth state — instances.json (per-instance retention metadata).
+  # Kept across `docker compose down` so multi-instance bookkeeping survives.
+  harnesses_data:

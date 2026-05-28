@@ -37,6 +37,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
 IDLE_TIMEOUT_MIN = int(os.environ.get("IDLE_TIMEOUT_MIN", "30"))
+RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "7"))
 BASE_DOMAIN = os.environ.get("HARNESS_BASE_DOMAIN", "lab.casava.space")
 COOKIE_NAME = "harness_session"
 CONTAINER_PREFIX = "harness-"
@@ -51,30 +52,162 @@ HARNESSES = [
     "claude", "aider", "opencode", "crush", "gptme", "goose", "plandex",
     "qwencode", "openhands", "kilocode", "codex", "pi", "droid",
 ]
+# OpenHands has its own web UI on :3000 with a stateful WORKSPACE_MOUNT_PATH;
+# Kilo Code is code-server on :8080 — neither maps cleanly to a plain ttyd
+# clone with a fresh workspace volume, so they stay single-instance.
+MULTI_INSTANCE_HARNESSES = {h for h in HARNESSES if h not in ("openhands", "kilocode")}
+INSTANCE_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$")
 ENV_FILE = "/app/.env"  # bind-mounted from host docker-compose.yml
+INSTANCES_FILE = "/data/instances.json"  # persisted across auth-service restarts
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("harness-auth")
 
 docker_client = docker.from_env()
+
+# Per-container idle tracking (monotonic, used by _idle_sweep for precision).
+# Key is the container name (e.g., "harness-claude-blog"), value is when it
+# was last accessed via /verify.
 last_seen: dict[str, float] = {}
+
+# Per-instance metadata persisted to /data/instances.json so retention survives
+# auth-service restarts.  Only contains *created* instances (not the base 13
+# single-instance harnesses, which are managed by docker-compose).
+# Key is the container name, value is {harness_type, created, last_seen_ts, pinned}.
+instances: dict[str, dict] = {}
 
 app = FastAPI(title="harness-auth", docs_url=None, redoc_url=None)
 
 
-def _container_name(harness: str) -> str:
-    return CONTAINER_PREFIX + harness
+def _harness_port(harness_type: str) -> int:
+    return HARNESS_PORT_OVERRIDES.get(harness_type, HARNESS_PORT)
 
 
-def _harness_port(harness: str) -> int:
-    return HARNESS_PORT_OVERRIDES.get(harness, HARNESS_PORT)
+def _parse_subdomain(subdomain: str) -> tuple[str, str | None]:
+    """Resolve a subdomain label to (harness_type, instance|None).
+
+    `claude`        → ("claude", None)     # the prebuilt single-instance harness
+    `claude-blog`   → ("claude", "blog")   # dynamic instance to create/route
+    `claude-9f3a2b` → ("claude", "9f3a2b") # auto-generated slug works the same
+    """
+    if subdomain in HARNESSES:
+        return subdomain, None
+    for harness in MULTI_INSTANCE_HARNESSES:
+        prefix = harness + "-"
+        if subdomain.startswith(prefix):
+            instance = subdomain[len(prefix):]
+            if not INSTANCE_NAME_RE.match(instance):
+                raise HTTPException(400, f"invalid instance name: {instance!r}")
+            return harness, instance
+    raise HTTPException(404, f"unknown harness or instance: {subdomain!r}")
 
 
-def _decode(token: str, expected_harness: str) -> dict:
-    # Master-key shortcut: passing JWT_SECRET directly grants access to every
-    # harness, no signing dance.  Convenient for the operator (one value to
-    # remember, lives in .env) but it does mean the secret travels in URLs +
-    # cookies — keep those out of screen-shares and browser sync.
+def _container_for(harness_type: str, instance: str | None) -> str:
+    if instance is None:
+        return CONTAINER_PREFIX + harness_type
+    return CONTAINER_PREFIX + harness_type + "-" + instance
+
+
+def _volume_for(harness_type: str, instance: str) -> str:
+    return f"workspace-{harness_type}-{instance}"
+
+
+def _instances_load() -> None:
+    global instances
+    if not os.path.exists(INSTANCES_FILE):
+        return
+    try:
+        with open(INSTANCES_FILE) as f:
+            instances = json.load(f)
+        log.info("loaded %d tracked instance(s) from %s", len(instances), INSTANCES_FILE)
+    except (OSError, json.JSONDecodeError) as e:
+        log.warning("could not load %s: %s — starting empty", INSTANCES_FILE, e)
+
+
+def _instances_save() -> None:
+    try:
+        os.makedirs(os.path.dirname(INSTANCES_FILE), exist_ok=True)
+        tmp = INSTANCES_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(instances, f, indent=2)
+        os.replace(tmp, INSTANCES_FILE)
+    except OSError as e:
+        log.warning("could not save %s: %s", INSTANCES_FILE, e)
+
+
+def _ensure_instance_container(harness_type: str, instance: str) -> str:
+    """Create a per-instance container from the base image if it doesn't exist.
+
+    Clones env from the base `harness-<type>` container so .env / compose
+    overrides stay the single source of truth — we never have to keep two
+    copies of the harness's environment in sync.  Each instance gets its own
+    named volume mounted at /workspace, isolated from every other instance
+    and from the base.
+    """
+    name = _container_for(harness_type, instance)
+    try:
+        docker_client.containers.get(name)
+        return name
+    except NotFound:
+        pass
+
+    base_name = CONTAINER_PREFIX + harness_type
+    try:
+        base = docker_client.containers.get(base_name)
+    except NotFound:
+        raise HTTPException(
+            502, f"base container {base_name} not found — `docker compose up -d` it first"
+        )
+
+    image = base.attrs["Config"]["Image"]
+    env = base.attrs["Config"]["Env"]
+    networks = list(base.attrs["NetworkSettings"]["Networks"].keys()) or ["harnesses_net"]
+
+    volume_name = _volume_for(harness_type, instance)
+    try:
+        docker_client.volumes.get(volume_name)
+    except NotFound:
+        docker_client.volumes.create(
+            name=volume_name,
+            labels={"harness.type": harness_type, "harness.instance": instance},
+        )
+
+    log.info("creating instance container %s (image=%s, volume=%s)",
+             name, image, volume_name)
+    container = docker_client.containers.create(
+        image=image,
+        name=name,
+        environment=env,
+        network=networks[0],
+        volumes={volume_name: {"bind": "/workspace", "mode": "rw"}},
+        restart_policy={"Name": "no"},
+        detach=True,
+        labels={"harness.type": harness_type, "harness.instance": instance},
+    )
+    for n in networks[1:]:
+        try:
+            docker_client.networks.get(n).connect(container)
+        except docker.errors.APIError as e:
+            log.warning("could not attach %s to network %s: %s", name, n, e)
+
+    instances[name] = {
+        "harness_type": harness_type,
+        "created": time.time(),
+        "last_seen_ts": time.time(),
+        "pinned": False,
+    }
+    _instances_save()
+    return name
+
+
+def _decode(token: str, subdomain: str, harness_type: str) -> dict:
+    """Validate the JWT (or master JWT_SECRET) against the calling subdomain.
+
+    Master JWT_SECRET → ok for everything (operator convenience).
+    Signed JWTs → the `harness` claim must match the full subdomain
+    (`claude-blog`), the harness type (`claude`, useful when the operator
+    issued a token before knowing the instance name), or the wildcard `*`.
+    """
     if token == JWT_SECRET:
         return {"harness": "*", "master": True}
     try:
@@ -83,14 +216,18 @@ def _decode(token: str, expected_harness: str) -> dict:
         raise HTTPException(status_code=401, detail="token expired")
     except jwt.PyJWTError as e:
         raise HTTPException(status_code=401, detail=f"invalid token: {e}")
-    if payload.get("harness") != expected_harness:
+    claim = payload.get("harness")
+    if claim not in (subdomain, harness_type, "*"):
         raise HTTPException(status_code=403, detail="token not valid for this harness")
     return payload
 
 
-def _ensure_running(harness: str) -> None:
-    """Start the container if needed and block until ttyd is reachable."""
-    name = _container_name(harness)
+def _ensure_running(harness_type: str, instance: str | None) -> str:
+    """Make sure the target container exists (creating instances on demand),
+    is started, and is reachable on its ttyd port.  Returns its name."""
+    if instance is not None:
+        _ensure_instance_container(harness_type, instance)
+    name = _container_for(harness_type, instance)
     try:
         container = docker_client.containers.get(name)
     except NotFound:
@@ -100,17 +237,19 @@ def _ensure_running(harness: str) -> None:
         log.info("starting %s (was %s)", name, container.status)
         container.start()
 
-    port = _harness_port(harness)
+    port = _harness_port(harness_type)
     deadline = time.monotonic() + COLD_START_TIMEOUT_S
     while time.monotonic() < deadline:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.5)
             try:
                 s.connect((name, port))
-                return
+                return name
             except OSError:
                 time.sleep(0.3)
-    raise HTTPException(status_code=504, detail=f"{name} did not come up within {COLD_START_TIMEOUT_S}s")
+    raise HTTPException(
+        status_code=504, detail=f"{name} did not come up within {COLD_START_TIMEOUT_S}s"
+    )
 
 
 @app.get("/healthz")
@@ -120,21 +259,26 @@ def healthz() -> dict:
 
 @app.get("/issue")
 def issue(request: Request, token: str = Query(...)) -> Response:
-    """Visited as `https://<harness>.<base>/?token=<jwt>` (Caddy rewrites here).
+    """Visited as `https://<subdomain>.<base>/?token=<jwt>` (Caddy rewrites here).
 
-    Derives the harness name from the Host header (everything before the
-    base domain), validates the JWT, sets a host-scoped cookie, and
-    302-redirects to `/` (without the token query) so the URL bar no longer
-    shows the secret.
+    Derives the subdomain from the Host header, parses out the harness type
+    and optional instance, validates the JWT, sets a *domain-scoped* cookie
+    (so one login covers every subdomain under .<BASE_DOMAIN>), then 302s
+    to `/` so the token leaves the URL bar.
     """
     host = request.headers.get("host", "").split(":")[0]
     suffix = "." + BASE_DOMAIN
     if not host.endswith(suffix):
-        raise HTTPException(status_code=400, detail=f"host {host} does not match base domain {BASE_DOMAIN}")
-    harness = host[: -len(suffix)]
-    _decode(token, harness)
+        raise HTTPException(
+            status_code=400, detail=f"host {host} does not match base domain {BASE_DOMAIN}"
+        )
+    subdomain = host[: -len(suffix)]
+    harness_type, _instance = _parse_subdomain(subdomain)
+    _decode(token, subdomain, harness_type)
 
     resp = RedirectResponse(url="/", status_code=302)
+    # domain=lab.casava.space (no leading dot — RFC 6265 spec; browsers extend
+    # to subdomains automatically) → one cookie unlocks every <name>.lab.…
     resp.set_cookie(
         key=COOKIE_NAME,
         value=token,
@@ -143,13 +287,18 @@ def issue(request: Request, token: str = Query(...)) -> Response:
         secure=True,
         samesite="lax",
         path="/",
+        domain=BASE_DOMAIN,
     )
     return resp
 
 
 @app.get("/verify")
 def verify(request: Request, harness: str = Query(...)) -> Response:
-    """Caddy `forward_auth` target: 200 → allow, anything else → block."""
+    """Caddy `forward_auth` target: 200 → allow, anything else → block.
+
+    `harness` query param is the full subdomain label (e.g., `claude` or
+    `claude-blog`); we parse it and route to (or create) the right container.
+    """
     token = request.cookies.get(COOKIE_NAME)
     if not token:
         return HTMLResponse(
@@ -157,13 +306,87 @@ def verify(request: Request, harness: str = Query(...)) -> Response:
             f"<code>https://{harness}.{BASE_DOMAIN}/?token=&lt;your-jwt&gt;</code> first.</p>",
             status_code=401,
         )
-    _decode(token, harness)
-    _ensure_running(harness)
-    last_seen[harness] = time.monotonic()
+    harness_type, instance = _parse_subdomain(harness)
+    _decode(token, harness, harness_type)
+    container = _ensure_running(harness_type, instance)
+
+    last_seen[container] = time.monotonic()
+    if container in instances:
+        instances[container]["last_seen_ts"] = time.time()
+        _instances_save()
     return Response(status_code=200)
 
 
+@app.get("/ask")
+def ask_tls(domain: str = Query(...)) -> Response:
+    """Caddy on-demand TLS gate.
+
+    Caddy hits this before provisioning a certificate for an unknown hostname.
+    We say yes only if the hostname matches a real harness or a valid instance
+    pattern — stops random SNI noise from burning Let's Encrypt rate limits.
+    """
+    suffix = "." + BASE_DOMAIN
+    if not domain.endswith(suffix):
+        return Response(status_code=403)
+    subdomain = domain[: -len(suffix)]
+    try:
+        _parse_subdomain(subdomain)
+    except HTTPException:
+        return Response(status_code=403)
+    return Response(status_code=200)
+
+
+@app.api_route("/pin", methods=["GET", "POST"])
+def pin_endpoint(request: Request) -> Response:
+    return _set_pin(request, pinned=True)
+
+
+@app.api_route("/unpin", methods=["GET", "POST"])
+def unpin_endpoint(request: Request) -> Response:
+    return _set_pin(request, pinned=False)
+
+
+def _set_pin(request: Request, pinned: bool) -> Response:
+    """Toggle the pinned flag on the calling subdomain's instance.  Pinned
+    instances skip the retention sweep and live until manually unpinned."""
+    host = request.headers.get("host", "").split(":")[0]
+    suffix = "." + BASE_DOMAIN
+    if not host.endswith(suffix):
+        raise HTTPException(400, "host mismatch")
+    subdomain = host[: -len(suffix)]
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        raise HTTPException(401, "no session cookie")
+    harness_type, instance = _parse_subdomain(subdomain)
+    _decode(token, subdomain, harness_type)
+    if instance is None:
+        return HTMLResponse(
+            f"<h1>n/a</h1><p>{subdomain} is the base harness, not an instance — "
+            f"nothing to pin.  Visit a slug variant like "
+            f"<code>{subdomain}-myproject.{BASE_DOMAIN}</code> first.</p>",
+            status_code=400,
+        )
+    name = _container_for(harness_type, instance)
+    if name not in instances:
+        raise HTTPException(404, f"instance {name} unknown — visit / first to create it")
+    instances[name]["pinned"] = pinned
+    _instances_save()
+    state = "pinned (kept forever)" if pinned else f"unpinned (retention {RETENTION_DAYS}d)"
+    return HTMLResponse(
+        f"<h1>{state}</h1><p>{name}</p>"
+        f'<p><a href="/">back to terminal</a></p>',
+        status_code=200,
+    )
+
+
 async def _idle_sweep() -> None:
+    """Stop containers that have been quiet for IDLE_TIMEOUT_MIN minutes.
+
+    Keys are container names (e.g. `harness-claude-blog`), not harness names —
+    both base and per-instance containers are tracked uniformly.  Stopping
+    frees RAM but does NOT touch the workspace volume; the next visit will
+    just restart the container with its files intact.
+    """
     if IDLE_TIMEOUT_MIN <= 0:
         log.info("idle sweep disabled (IDLE_TIMEOUT_MIN=0)")
         return
@@ -171,14 +394,13 @@ async def _idle_sweep() -> None:
     while True:
         await asyncio.sleep(60)
         now = time.monotonic()
-        for harness, ts in list(last_seen.items()):
+        for name, ts in list(last_seen.items()):
             if now - ts < timeout_s:
                 continue
-            name = _container_name(harness)
             try:
                 container = docker_client.containers.get(name)
             except NotFound:
-                last_seen.pop(harness, None)
+                last_seen.pop(name, None)
                 continue
             if container.status == "running":
                 log.info("stopping %s after %ds idle", name, int(now - ts))
@@ -186,7 +408,52 @@ async def _idle_sweep() -> None:
                     container.stop(timeout=5)
                 except Exception as e:
                     log.warning("failed to stop %s: %s", name, e)
-            last_seen.pop(harness, None)
+            last_seen.pop(name, None)
+
+
+async def _retention_sweep() -> None:
+    """Delete per-instance containers + volumes after RETENTION_DAYS of inactivity.
+
+    Only affects tracked instances (the ones the auth-service created).  The
+    base 13 harnesses are owned by docker-compose and never touched.  Pinned
+    instances are also exempt — operator opts them in via /pin.
+    """
+    if RETENTION_DAYS <= 0:
+        log.info("retention sweep disabled (RETENTION_DAYS=0)")
+        return
+    cutoff_s = RETENTION_DAYS * 86400
+    # Sweep every hour; 7 days of unpinned silence triggers cleanup.
+    while True:
+        await asyncio.sleep(3600)
+        now = time.time()
+        for name, meta in list(instances.items()):
+            if meta.get("pinned"):
+                continue
+            last = meta.get("last_seen_ts", 0)
+            if now - last < cutoff_s:
+                continue
+            age_days = (now - last) / 86400
+            log.info("retention: removing %s (idle %.1fd, exceeds %dd)",
+                     name, age_days, RETENTION_DAYS)
+            try:
+                docker_client.containers.get(name).remove(force=True)
+            except NotFound:
+                pass
+            except Exception as e:
+                log.warning("could not remove container %s: %s", name, e)
+            harness_type = meta.get("harness_type", "")
+            short = name[len(CONTAINER_PREFIX):]  # e.g., 'claude-blog'
+            if harness_type and short.startswith(harness_type + "-"):
+                instance = short[len(harness_type) + 1:]
+                try:
+                    docker_client.volumes.get(_volume_for(harness_type, instance)).remove()
+                except NotFound:
+                    pass
+                except Exception as e:
+                    log.warning("could not remove volume for %s: %s", name, e)
+            instances.pop(name, None)
+            last_seen.pop(name, None)
+        _instances_save()
 
 
 def _sign_token(harness: str) -> str:
@@ -257,22 +524,38 @@ def _autofill_tokens_and_log_urls() -> None:
 
     sep = "=" * 78
     log.info(sep)
-    log.info("Master login (JWT_SECRET works on every harness, no expiry):")
+    log.info("Master login (JWT_SECRET works on every subdomain + every instance):")
+    log.info(sep)
+    log.info("  cookie domain is .%s — log in once on ANY subdomain, all unlocked", BASE_DOMAIN)
+    log.info(sep)
+    log.info("Base harnesses (always present, no auto-cleanup):")
     log.info(sep)
     for h in HARNESSES:
         log.info("  https://%s.%s/?token=%s", h, BASE_DOMAIN, JWT_SECRET)
     log.info(sep)
-    log.info("Per-harness tokens (30-day, scoped to one subdomain) — same effect:")
+    log.info("Multi-instance pattern — visit any URL of this shape to spin up")
+    log.info("a fresh isolated container + workspace volume (auto-cleanup after %dd", RETENTION_DAYS)
+    log.info("of no activity unless you /pin it):")
     log.info(sep)
-    for h in HARNESSES:
-        log.info("  https://%s.%s/?token=%s", h, BASE_DOMAIN, tokens[h])
+    for h in sorted(MULTI_INSTANCE_HARNESSES):
+        log.info("  https://%s-<your-slug>.%s/?token=%s", h, BASE_DOMAIN, JWT_SECRET)
     log.info(sep)
+    if instances:
+        log.info("Currently tracked instances (use /pin and /unpin to manage):")
+        log.info(sep)
+        for name, meta in sorted(instances.items()):
+            idle_days = (time.time() - meta.get("last_seen_ts", time.time())) / 86400
+            tag = "PINNED" if meta.get("pinned") else f"idle {idle_days:.1f}d / {RETENTION_DAYS}d"
+            log.info("  %-40s [%s]", name, tag)
+        log.info(sep)
 
 
 @app.on_event("startup")
 async def _startup() -> None:
+    _instances_load()
     _autofill_tokens_and_log_urls()
     asyncio.create_task(_idle_sweep())
+    asyncio.create_task(_retention_sweep())
 
 
 # ── Anthropic-on-OpenAI translation proxy ─────────────────────────────────────

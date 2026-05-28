@@ -1,16 +1,29 @@
 # ── Harnesses lab ─────────────────────────────────────────────────────────────
 # Append this block to /root/caddy-router/Caddyfile.
 #
-# DNS:  wildcard A record  *.lab.casava.space  →  this VPS
+# Current deployment: each harness has its own A record + dedicated site block.
+# Single-instance only.
 #
-# Auth flow per harness:
-#   1. Visitor opens  https://<harness>.lab.casava.space/?token=<JWT>
+# Multi-instance via wildcard subdomains is implemented in the auth-service
+# (it creates per-slug containers + volumes on demand, with retention).  The
+# Caddy layer to activate it is at the bottom of this file under "## OPTIONAL".
+# Two prerequisites before enabling that:
+#
+#   1. DNS:  add an `*.lab.casava.space  A  <VPS_IP>` wildcard record at your
+#            DNS provider.  Without this, `claude-foo.lab.casava.space` won't
+#            resolve no matter what Caddy does.
+#   2. Caddy on-demand TLS: HTTP-01 + wildcard hostnames can be tricky.  Test
+#            after enabling that openhands.lab + kilocode.lab still serve
+#            their existing certs from /data/caddy without re-issuance.
+#
+# Auth flow per visit (current single-instance layout):
+#   1. Visitor opens  https://<harness>.lab.casava.space/?token=<JWT_SECRET-or-jwt>
 #   2. @hastoken handler rewrites to /issue and proxies to harnesses-auth.
-#      Auth validates the JWT, sets a host-scoped HttpOnly cookie, redirects
-#      back to /  (so the URL bar stops showing the secret).
-#   3. Subsequent requests fall through to `forward_auth` which calls
-#      auth /verify?harness=<name>.  Auth validates the cookie AND ensures
-#      the container is running (cold-start blocks 3-7s).
+#      Auth validates the token, sets an HttpOnly cookie scoped to .lab.casava.space
+#      (one cookie unlocks every subdomain), and 302s to /.
+#   3. Subsequent requests hit forward_auth which calls auth /verify?harness=<name>.
+#      Auth validates the cookie AND ensures the container is running
+#      (cold-start blocks 3-7s).
 #   4. On 200, Caddy proxies to the harness container by service name.
 #
 # Reload after editing:
@@ -24,6 +37,19 @@
         @hastoken query token=*
         handle @hastoken {
             rewrite * /issue
+            reverse_proxy harnesses-auth:8080
+        }
+
+        # /pin and /unpin go back to the auth service (toggle retention for
+        # the instance corresponding to the calling subdomain).  Only meaningful
+        # once the wildcard block at the bottom of this file is enabled — for
+        # single-instance subdomains the auth-service returns a friendly 400.
+        @pinpath path /pin /unpin
+        handle @pinpath {
+            forward_auth harnesses-auth:8080 {
+                uri /verify?harness={args[0]}
+                copy_headers Cookie
+            }
             reverse_proxy harnesses-auth:8080
         }
 
@@ -150,3 +176,26 @@ droid.lab.casava.space {
         header_up Host {host}
     }
 }
+
+# ── OPTIONAL: multi-instance wildcard ─────────────────────────────────────────
+# Uncomment after:
+#   (a) adding `*.lab.casava.space  A  <VPS_IP>` to DNS, and
+#   (b) adding this to the GLOBAL { … } block at the top of the Caddyfile:
+#         on_demand_tls {
+#             ask http://harnesses-auth:8080/ask
+#         }
+#
+# Once enabled, `claude-blog.lab.casava.space` (or any `<harness>-<slug>` URL)
+# will create a fresh isolated container + volume on first visit.  Retention
+# sweep in the auth-service auto-cleans unpinned instances after RETENTION_DAYS.
+#
+# *.lab.casava.space {
+#     tls {
+#         on_demand
+#     }
+#     import harness_auth {labels.3}
+#     reverse_proxy harness-{labels.3}:7681 {
+#         flush_interval -1
+#         header_up Host {host}
+#     }
+# }
