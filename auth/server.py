@@ -71,6 +71,12 @@ def _harness_port(harness: str) -> int:
 
 
 def _decode(token: str, expected_harness: str) -> dict:
+    # Master-key shortcut: passing JWT_SECRET directly grants access to every
+    # harness, no signing dance.  Convenient for the operator (one value to
+    # remember, lives in .env) but it does mean the secret travels in URLs +
+    # cookies — keep those out of screen-shares and browser sync.
+    if token == JWT_SECRET:
+        return {"harness": "*", "master": True}
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
     except jwt.ExpiredSignatureError:
@@ -251,7 +257,12 @@ def _autofill_tokens_and_log_urls() -> None:
 
     sep = "=" * 78
     log.info(sep)
-    log.info("Harness login URLs (30-day tokens; open in browser):")
+    log.info("Master login (JWT_SECRET works on every harness, no expiry):")
+    log.info(sep)
+    for h in HARNESSES:
+        log.info("  https://%s.%s/?token=%s", h, BASE_DOMAIN, JWT_SECRET)
+    log.info(sep)
+    log.info("Per-harness tokens (30-day, scoped to one subdomain) — same effect:")
     log.info(sep)
     for h in HARNESSES:
         log.info("  https://%s.%s/?token=%s", h, BASE_DOMAIN, tokens[h])
