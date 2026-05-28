@@ -275,87 +275,332 @@ async def _startup() -> None:
     asyncio.create_task(_idle_sweep())
 
 
-# ── OpenRouter Anthropic-compat proxy ─────────────────────────────────────────
-# Claude Code (and Droid) send Anthropic /v1/messages requests and expect the
-# response content array to be just `[{type: text, …}]`.  OpenRouter on most
-# free models wraps the response with `thinking` and `redacted_thinking`
-# blocks, which Claude Code's content accumulator handles incorrectly —
-# `result` ends up empty even though the model said something useful.
+# ── Anthropic-on-OpenAI translation proxy ─────────────────────────────────────
+# Claude Code (and Droid) send Anthropic /v1/messages requests.  OpenRouter
+# does expose an Anthropic-compat surface at /v1/messages, but its tool routing
+# is only wired up for a subset of models — most NVIDIA/MiniMax/etc free models
+# return "No endpoints found that support the provided 'tool_choice' value" any
+# time the request has a `tools` array.
 #
-# This proxy sits between those harnesses and OpenRouter:
-#   1. injects `reasoning: {exclude: true}` into the request body, asking
-#      OpenRouter not to emit thinking blocks at all
-#   2. for streaming responses, drops any SSE events for thinking content
-#      blocks that slip through anyway
+# OpenRouter's OpenAI-compat surface at /v1/chat/completions does have tool
+# routing for those same models.  So this proxy:
 #
-# Harnesses point at it via `ANTHROPIC_BASE_URL=http://harnesses-auth:8080/anthropic`.
-# The proxy forwards to OpenRouter's Anthropic-compat endpoint.
+#   1. Translates the incoming Anthropic body into OpenAI chat.completions
+#      form (system + messages + tools + tool_choice + sampling params).
+#   2. Sends it to OpenRouter's OpenAI-compat endpoint.
+#   3. Translates the response (or SSE stream) back to Anthropic /v1/messages
+#      shape, so Claude Code's content accumulator sees exactly what it
+#      expects: `content: [{type:text|tool_use, …}]` + `stop_reason`.
+#   4. Suppresses OpenRouter's reasoning blocks via `reasoning.exclude=true`,
+#      so reasoning-class models don't double-charge tokens emitting thoughts
+#      we'd drop anyway.
+#
+# Harnesses point at this via `ANTHROPIC_BASE_URL=http://harnesses-auth:8080/anthropic`.
 
-OPENROUTER_ANTHROPIC = "https://openrouter.ai/api/v1/messages"
+OPENROUTER_OPENAI = "https://openrouter.ai/api/v1/chat/completions"
 _PROXY_CLIENT = httpx.AsyncClient(timeout=httpx.Timeout(300.0))
 
-
-def _strip_thinking(payload: dict) -> dict:
-    """Remove thinking/redacted_thinking blocks from a non-streamed response."""
-    if isinstance(payload.get("content"), list):
-        payload["content"] = [
-            c for c in payload["content"]
-            if c.get("type") not in ("thinking", "redacted_thinking")
-        ]
-    return payload
+_FINISH_TO_STOP = {
+    "stop": "end_turn",
+    "length": "max_tokens",
+    "tool_calls": "tool_use",
+    "function_call": "tool_use",
+    "content_filter": "stop_sequence",
+}
 
 
-async def _stream_filter(upstream: httpx.Response):
-    """Iterate the upstream SSE stream and drop thinking-block events.
+def _anthropic_to_openai_request(payload: dict) -> dict:
+    """Translate an Anthropic /v1/messages body → OpenAI /v1/chat/completions."""
+    out: dict = {"model": payload.get("model"), "messages": []}
 
-    SSE events arrive as `event: <name>\\ndata: <json>\\n\\n` triples; we have
-    to buffer the event-line so we can drop or pass it together with its
-    data-line, otherwise the consumer gets orphaned `event: ...` lines without
-    matching data and complains.
-    """
-    pending_event = None
-    drop = False
-    async for raw_line in upstream.aiter_lines():
-        if not raw_line:
-            if pending_event is not None:
-                yield pending_event + "\n"
-                pending_event = None
-            yield "\n"
-            continue
-        if raw_line.startswith("event: "):
-            pending_event = raw_line
-            continue
-        if raw_line.startswith("data: "):
-            payload = raw_line[6:]
-            try:
-                obj = json.loads(payload)
-            except json.JSONDecodeError:
-                if pending_event is not None:
-                    yield pending_event + "\n"
-                    pending_event = None
-                yield raw_line + "\n"
-                continue
-            t = obj.get("type")
-            if t == "content_block_start":
-                block_type = (obj.get("content_block") or {}).get("type")
-                if block_type in ("thinking", "redacted_thinking"):
-                    drop = True
-                    pending_event = None
-                    continue
-            elif t in ("content_block_delta", "content_block_stop") and drop:
-                if t == "content_block_stop":
-                    drop = False
-                pending_event = None
-                continue
-            if pending_event is not None:
-                yield pending_event + "\n"
-                pending_event = None
-            yield raw_line + "\n"
+    # System field: Anthropic allows a string or a list of {type:text} blocks.
+    sys = payload.get("system")
+    if sys:
+        if isinstance(sys, list):
+            sys_text = "\n\n".join(
+                b.get("text", "") for b in sys if b.get("type") == "text"
+            )
         else:
-            if pending_event is not None:
-                yield pending_event + "\n"
-                pending_event = None
-            yield raw_line + "\n"
+            sys_text = sys
+        if sys_text:
+            out["messages"].append({"role": "system", "content": sys_text})
+
+    # Messages: each Anthropic block may map to one or several OpenAI messages
+    # (a single user turn with N tool_result blocks becomes N role=tool msgs).
+    for msg in payload.get("messages", []) or []:
+        role = msg.get("role")
+        content = msg.get("content")
+
+        if isinstance(content, str):
+            out["messages"].append({"role": role, "content": content})
+            continue
+
+        if role == "assistant":
+            text_parts, tool_calls = [], []
+            for block in content or []:
+                btype = block.get("type")
+                if btype == "text":
+                    text_parts.append(block.get("text", ""))
+                elif btype == "tool_use":
+                    tool_calls.append({
+                        "id": block.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name"),
+                            "arguments": json.dumps(block.get("input", {})),
+                        },
+                    })
+            asst = {"role": "assistant", "content": "\n".join(text_parts) or None}
+            if tool_calls:
+                asst["tool_calls"] = tool_calls
+            out["messages"].append(asst)
+            continue
+
+        # Walk user-role blocks in source order; emit a user message with
+        # accumulated text/image content, then flush tool_result blocks as
+        # separate role=tool messages (OpenAI requires this split).
+        buf: list = []
+        for block in content or []:
+            btype = block.get("type")
+            if btype == "text":
+                buf.append({"type": "text", "text": block.get("text", "")})
+            elif btype == "image":
+                src = block.get("source") or {}
+                if src.get("type") == "base64":
+                    url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
+                    buf.append({"type": "image_url", "image_url": {"url": url}})
+            elif btype == "tool_result":
+                if buf:
+                    flat = "".join(b.get("text", "") for b in buf if b.get("type") == "text")
+                    out["messages"].append({"role": "user", "content": flat or buf})
+                    buf = []
+                tc = block.get("content", "")
+                if isinstance(tc, list):
+                    tc = "".join(c.get("text", "") for c in tc if c.get("type") == "text")
+                out["messages"].append({
+                    "role": "tool",
+                    "tool_call_id": block.get("tool_use_id"),
+                    "content": tc if isinstance(tc, str) else json.dumps(tc),
+                })
+        if buf:
+            flat = "".join(b.get("text", "") for b in buf if b.get("type") == "text")
+            out["messages"].append({"role": "user", "content": flat or buf})
+
+    # Tools: Anthropic {name, description, input_schema} → OpenAI function schema.
+    tools = payload.get("tools")
+    if tools:
+        out["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.get("name"),
+                    "description": t.get("description", ""),
+                    "parameters": t.get("input_schema") or {"type": "object", "properties": {}},
+                },
+            }
+            for t in tools
+        ]
+
+    tc = payload.get("tool_choice")
+    if isinstance(tc, dict):
+        tct = tc.get("type")
+        if tct == "auto":
+            out["tool_choice"] = "auto"
+        elif tct == "any":
+            out["tool_choice"] = "required"
+        elif tct == "tool":
+            out["tool_choice"] = {"type": "function", "function": {"name": tc.get("name")}}
+        elif tct == "none":
+            out["tool_choice"] = "none"
+
+    for k in ("max_tokens", "temperature", "top_p"):
+        if k in payload:
+            out[k] = payload[k]
+    if "stop_sequences" in payload:
+        out["stop"] = payload["stop_sequences"]
+    if "metadata" in payload and isinstance(payload["metadata"], dict):
+        user_id = payload["metadata"].get("user_id")
+        if user_id:
+            out["user"] = user_id
+    if payload.get("stream"):
+        out["stream"] = True
+        out["stream_options"] = {"include_usage": True}
+
+    # OpenRouter-specific: suppress reasoning emissions so we don't pay for
+    # tokens we'd strip anyway.
+    out["reasoning"] = {"exclude": True}
+
+    return out
+
+
+def _openai_to_anthropic_response(data: dict) -> dict:
+    """OpenAI chat.completion → Anthropic /v1/messages non-streaming response."""
+    choice = (data.get("choices") or [{}])[0]
+    msg = choice.get("message") or {}
+
+    content: list = []
+    text = msg.get("content")
+    if text:
+        content.append({"type": "text", "text": text})
+
+    for tc in msg.get("tool_calls") or []:
+        fn = tc.get("function") or {}
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except json.JSONDecodeError:
+            args = {}
+        content.append({
+            "type": "tool_use",
+            "id": tc.get("id"),
+            "name": fn.get("name"),
+            "input": args,
+        })
+
+    if not content:
+        content = [{"type": "text", "text": ""}]
+
+    usage = data.get("usage") or {}
+    return {
+        "id": data.get("id", ""),
+        "type": "message",
+        "role": "assistant",
+        "model": data.get("model", ""),
+        "content": content,
+        "stop_reason": _FINISH_TO_STOP.get(choice.get("finish_reason"), "end_turn"),
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+        },
+    }
+
+
+async def _translate_stream(upstream: httpx.Response, model: str, msg_id: str):
+    """Convert an OpenAI chat.completion SSE stream → Anthropic /v1/messages SSE.
+
+    The shapes are wildly different.  OpenAI emits one `delta` chunk per token
+    with optional `content` and/or `tool_calls` partials; Anthropic emits a
+    `message_start`, then per content-block start/delta/stop events, then a
+    `message_delta` + `message_stop`.  We track which block index we're inside
+    for text vs. each tool_call, and open/close blocks as the data shifts.
+    """
+
+    def sse(event: str, data: dict) -> bytes:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    yield sse("message_start", {
+        "type": "message_start",
+        "message": {
+            "id": msg_id,
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        },
+    })
+
+    text_block_open = False
+    text_block_index = -1
+    # tool_call index (from OpenAI) → block index in Anthropic stream
+    tool_blocks: dict[int, int] = {}
+    next_block_index = 0
+    final_finish: str | None = None
+    final_usage: dict = {}
+
+    async for raw in upstream.aiter_lines():
+        if not raw.startswith("data: "):
+            continue
+        body = raw[6:].strip()
+        if body == "[DONE]":
+            break
+        try:
+            chunk = json.loads(body)
+        except json.JSONDecodeError:
+            continue
+
+        if chunk.get("usage"):
+            final_usage = chunk["usage"]
+        choices = chunk.get("choices") or []
+        if not choices:
+            continue
+        choice = choices[0]
+        delta = choice.get("delta") or {}
+
+        # Text content delta
+        text = delta.get("content")
+        if text:
+            if not text_block_open:
+                text_block_index = next_block_index
+                next_block_index += 1
+                text_block_open = True
+                yield sse("content_block_start", {
+                    "type": "content_block_start",
+                    "index": text_block_index,
+                    "content_block": {"type": "text", "text": ""},
+                })
+            yield sse("content_block_delta", {
+                "type": "content_block_delta",
+                "index": text_block_index,
+                "delta": {"type": "text_delta", "text": text},
+            })
+
+        # Tool call deltas — OpenAI emits these incrementally, with `index`
+        # pointing at the tool call slot.  First chunk has id+name, subsequent
+        # chunks add to `arguments` (partial JSON).
+        for tc in delta.get("tool_calls") or []:
+            oi = tc.get("index", 0)
+            if oi not in tool_blocks:
+                # Close text block if still open before starting a tool block.
+                if text_block_open:
+                    yield sse("content_block_stop", {
+                        "type": "content_block_stop",
+                        "index": text_block_index,
+                    })
+                    text_block_open = False
+                bi = next_block_index
+                next_block_index += 1
+                tool_blocks[oi] = bi
+                fn = tc.get("function") or {}
+                yield sse("content_block_start", {
+                    "type": "content_block_start",
+                    "index": bi,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": tc.get("id") or f"call_{oi}",
+                        "name": fn.get("name", ""),
+                        "input": {},
+                    },
+                })
+            fn = tc.get("function") or {}
+            args_partial = fn.get("arguments")
+            if args_partial:
+                yield sse("content_block_delta", {
+                    "type": "content_block_delta",
+                    "index": tool_blocks[oi],
+                    "delta": {"type": "input_json_delta", "partial_json": args_partial},
+                })
+
+        if choice.get("finish_reason"):
+            final_finish = choice["finish_reason"]
+
+    # Close any blocks still open.
+    if text_block_open:
+        yield sse("content_block_stop", {"type": "content_block_stop", "index": text_block_index})
+    for bi in tool_blocks.values():
+        yield sse("content_block_stop", {"type": "content_block_stop", "index": bi})
+
+    yield sse("message_delta", {
+        "type": "message_delta",
+        "delta": {
+            "stop_reason": _FINISH_TO_STOP.get(final_finish, "end_turn"),
+            "stop_sequence": None,
+        },
+        "usage": {"output_tokens": final_usage.get("completion_tokens", 0)},
+    })
+    yield sse("message_stop", {"type": "message_stop"})
 
 
 @app.api_route("/anthropic/v1/messages", methods=["POST"])
@@ -366,20 +611,25 @@ async def proxy_messages(request: Request) -> Response:
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="invalid JSON")
 
-    # Tell OpenRouter not to emit reasoning content.  This is the body-level
-    # equivalent of OpenAI's `extra_body={"reasoning": {"exclude": True}}`.
-    payload.setdefault("reasoning", {})["exclude"] = True
-
-    # Pass through caller headers (Authorization, anthropic-version, etc.) but
-    # drop hop-by-hop headers that httpx will set itself.
-    fwd_headers = {
-        k: v for k, v in request.headers.items()
-        if k.lower() not in ("host", "content-length", "connection", "accept-encoding")
-    }
-
     streaming = bool(payload.get("stream"))
+    model = payload.get("model", "")
+    msg_id = "msg_" + str(int(time.time() * 1000))
+
+    openai_body = _anthropic_to_openai_request(payload)
+
+    # Forward only the auth header (Authorization or x-api-key).  Drop the
+    # Anthropic-specific headers (anthropic-version, anthropic-beta, etc.) —
+    # OpenRouter's OpenAI endpoint doesn't understand them and warns on some.
+    auth_hdr = (
+        request.headers.get("authorization")
+        or (f"Bearer {request.headers.get('x-api-key')}" if request.headers.get("x-api-key") else None)
+    )
+    fwd_headers = {"Content-Type": "application/json"}
+    if auth_hdr:
+        fwd_headers["Authorization"] = auth_hdr
+
     upstream_request = _PROXY_CLIENT.build_request(
-        "POST", OPENROUTER_ANTHROPIC, json=payload, headers=fwd_headers,
+        "POST", OPENROUTER_OPENAI, json=openai_body, headers=fwd_headers,
     )
 
     if streaming:
@@ -387,26 +637,30 @@ async def proxy_messages(request: Request) -> Response:
         if upstream.status_code >= 400:
             text = await upstream.aread()
             await upstream.aclose()
+            log.warning("upstream %d: %s", upstream.status_code, text[:300])
             return Response(content=text, status_code=upstream.status_code,
                             media_type=upstream.headers.get("content-type", "application/json"))
+
         async def gen():
             try:
-                async for chunk in _stream_filter(upstream):
-                    yield chunk.encode()
+                async for chunk in _translate_stream(upstream, model, msg_id):
+                    yield chunk
             finally:
                 await upstream.aclose()
-        return StreamingResponse(gen(), status_code=upstream.status_code,
-                                 media_type="text/event-stream")
+
+        return StreamingResponse(gen(), status_code=200, media_type="text/event-stream")
 
     upstream = await _PROXY_CLIENT.send(upstream_request)
     if upstream.status_code >= 400:
+        log.warning("upstream %d: %s", upstream.status_code, upstream.text[:300])
         return Response(content=upstream.content, status_code=upstream.status_code,
                         media_type=upstream.headers.get("content-type", "application/json"))
     try:
         data = upstream.json()
-        data = _strip_thinking(data)
-        return Response(content=json.dumps(data), status_code=200,
+        translated = _openai_to_anthropic_response(data)
+        return Response(content=json.dumps(translated), status_code=200,
                         media_type="application/json")
-    except Exception:
-        return Response(content=upstream.content, status_code=upstream.status_code,
+    except Exception as e:
+        log.exception("translation failed: %s", e)
+        return Response(content=upstream.content, status_code=502,
                         media_type=upstream.headers.get("content-type", "application/json"))
