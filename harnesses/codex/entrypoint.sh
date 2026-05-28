@@ -7,4 +7,4 @@ export CODEX_MODEL="${MODEL_NAME}"
 
 tmux new-session -d -s main -c /workspace
 tmux send-keys -t main "codex --model ${MODEL_NAME}" Enter
-exec ttyd --port 7681 --writable --check-origin=false tmux attach-session -t main
+exec ttyd --port 7681 --writable --check-origin=false -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main
