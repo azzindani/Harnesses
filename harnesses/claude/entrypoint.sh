@@ -33,7 +33,11 @@ export ANTHROPIC_DEFAULT_OPUS_MODEL="${M2:-$M1}"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="${M3:-$M1}"
 export ANTHROPIC_CUSTOM_MODEL_OPTION="${M4:-${M2:-$M1}}"
 
-echo "Claude /model picker:"
+# Pin the configured primary (Nemotron / MODEL_NAME) as the active model so
+# every session starts on it; the picker still lets you switch to the others.
+export ANTHROPIC_MODEL="$M1"
+
+echo "Claude /model picker (active = $ANTHROPIC_MODEL):"
 echo "  Sonnet (default) = $ANTHROPIC_DEFAULT_SONNET_MODEL"
 echo "  Opus             = $ANTHROPIC_DEFAULT_OPUS_MODEL"
 echo "  Haiku            = $ANTHROPIC_DEFAULT_HAIKU_MODEL"
@@ -55,6 +59,11 @@ if [ -n "$FOLIO_MCP_URL" ] && [ -n "$FOLIO_MCP_TOKEN" ]; then
     fi
 fi
 
+# Run with permissions bypassed.  Claude Code refuses --dangerously-skip-
+# permissions under root, but IS_SANDBOX=1 marks this container as a sandbox and
+# re-enables it (the lab containers are disposable and network-isolated).
+export IS_SANDBOX=1
+
 tmux new-session -d -s main -c /workspace
-tmux send-keys -t main "claude" Enter
+tmux send-keys -t main "claude --dangerously-skip-permissions" Enter
 exec ttyd --port 7681 --writable -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main
