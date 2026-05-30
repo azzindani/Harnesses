@@ -601,7 +601,9 @@ OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
 PRIMARY_MODEL = os.environ.get("MODEL_NAME", "")
 FREE_FALLBACK = os.environ.get("FREE_FALLBACK", "1") not in ("0", "false", "False", "")
 FREE_MODELS_REFRESH_MIN = int(os.environ.get("FREE_MODELS_REFRESH_MIN", "60"))
-FREE_MODELS_LIMIT = int(os.environ.get("FREE_MODELS_LIMIT", "20"))  # cap on fallback array length
+FREE_MODELS_LIMIT = int(os.environ.get("FREE_MODELS_LIMIT", "3"))  # cap on fallback array length
+# OpenRouter rejects a `models` array longer than 3 items
+# ("'models' array must have 3 items or fewer"), so keep this <= 3.
 
 # Caches populated by _refresh_free_models().  `_free_model_ids` is the ordered
 # id list (fallback array source); `_free_models_catalog` holds OpenAI-shaped
