@@ -605,6 +605,11 @@ FREE_MODELS_LIMIT = int(os.environ.get("FREE_MODELS_LIMIT", "3"))  # cap on fall
 # OpenRouter rejects a `models` array longer than 3 items
 # ("'models' array must have 3 items or fewer"), so keep this <= 3.
 
+# Claude Code's gateway model discovery only adds models whose id begins with
+# "claude"/"anthropic" to the /model picker, so /anthropic/v1/models exposes free
+# models under this prefix and the Anthropic proxy strips it back off.
+GATEWAY_MODEL_PREFIX = "anthropic/"
+
 # Caches populated by _refresh_free_models().  `_free_model_ids` is the ordered
 # id list (fallback array source); `_free_models_catalog` holds OpenAI-shaped
 # model dicts served by GET /v1/models.
@@ -1003,6 +1008,14 @@ async def proxy_messages(request: Request) -> Response:
 
     streaming = bool(payload.get("stream"))
     model = payload.get("model", "")
+    # Gateway model discovery (CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY) only
+    # adds models whose id starts with claude/anthropic to the picker, so
+    # /anthropic/v1/models advertises free models as "anthropic/<real-id>".
+    # Strip that synthetic prefix back to the real OpenRouter id here.  No free
+    # model id genuinely starts with "anthropic/", so this is unambiguous.
+    if model.startswith(GATEWAY_MODEL_PREFIX):
+        model = model[len(GATEWAY_MODEL_PREFIX):]
+        payload["model"] = model
     msg_id = "msg_" + str(int(time.time() * 1000))
 
     openai_body = _anthropic_to_openai_request(payload)
@@ -1069,6 +1082,25 @@ async def proxy_messages(request: Request) -> Response:
 # fallback array as the Anthropic proxy.  Point a harness here with
 # OPENAI_API_BASE/OPENAI_BASE_URL=http://harnesses-auth:8080/v1 (or
 # OPENAI_HOST=http://harnesses-auth:8080).  Both /v1/* and /openai/v1/* work.
+
+@app.get("/anthropic/v1/models")
+def list_models_anthropic() -> dict:
+    """Anthropic-format catalog for Claude Code's gateway model discovery.
+
+    Claude Code queries ${ANTHROPIC_BASE_URL}/v1/models at startup when
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 and adds entries whose id starts
+    with claude/anthropic to the /model picker, using `display_name` as the label.
+    We prefix each free id with GATEWAY_MODEL_PREFIX so it passes that filter and
+    show the real id as the display name; proxy_messages strips the prefix back.
+    """
+    ids = _free_model_ids or ([PRIMARY_MODEL] if PRIMARY_MODEL else [])
+    data = [
+        {"type": "model", "id": GATEWAY_MODEL_PREFIX + mid, "display_name": mid}
+        for mid in ids
+    ]
+    log.info("gateway model discovery: served %d models", len(data))
+    return {"object": "list", "data": data}
+
 
 @app.get("/v1/models")
 @app.get("/openai/v1/models")
