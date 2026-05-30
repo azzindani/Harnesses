@@ -37,6 +37,11 @@ export ANTHROPIC_CUSTOM_MODEL_OPTION="${M4:-${M2:-$M1}}"
 # every session starts on it; the picker still lets you switch to the others.
 export ANTHROPIC_MODEL="$M1"
 
+# Gateway model discovery: Claude Code queries ${ANTHROPIC_BASE_URL}/v1/models at
+# startup and adds the full free catalog to the /model picker (labelled "From
+# gateway"), so all free models are pickable — not just the 4 tier slots above.
+export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
+
 echo "Claude /model picker (active = $ANTHROPIC_MODEL):"
 echo "  Sonnet (default) = $ANTHROPIC_DEFAULT_SONNET_MODEL"
 echo "  Opus             = $ANTHROPIC_DEFAULT_OPUS_MODEL"
@@ -59,6 +64,26 @@ if [ -n "$FOLIO_MCP_URL" ] && [ -n "$FOLIO_MCP_TOKEN" ]; then
     fi
 fi
 
+# Pre-accept the first-run dialogs (onboarding, "trust this folder", and the
+# Bypass Permissions warning) so a freshly-recreated container drops straight
+# into the session instead of stopping on interactive prompts.  ~/.claude.json
+# is ephemeral (recreated each boot), so this is re-seeded every time.
+CFG="$HOME/.claude.json"
+[ -f "$CFG" ] || echo '{}' > "$CFG"
+_tmp=$(mktemp)
+if jq '.hasCompletedOnboarding = true
+       | .bypassPermissionsModeAccepted = true
+       | .projects = (.projects // {})
+       | .projects["/workspace"] = ((.projects["/workspace"] // {}) + {
+             hasTrustDialogAccepted: true,
+             bypassPermissionsModeAccepted: true,
+             hasCompletedProjectOnboarding: true
+         })' "$CFG" > "$_tmp" 2>/dev/null; then
+    mv "$_tmp" "$CFG"
+else
+    rm -f "$_tmp"
+fi
+
 # Run with permissions bypassed.  Claude Code refuses --dangerously-skip-
 # permissions under root, but IS_SANDBOX=1 marks this container as a sandbox and
 # re-enables it (the lab containers are disposable and network-isolated).
@@ -66,4 +91,23 @@ export IS_SANDBOX=1
 
 tmux new-session -d -s main -c /workspace
 tmux send-keys -t main "claude --dangerously-skip-permissions" Enter
+
+# The Bypass Permissions warning can't be pre-accepted via config (the config
+# flags are ignored), so auto-confirm it once the dialog renders — this is a
+# disposable, network-isolated sandbox and bypass is the intended mode.  Polls
+# the pane for the dialog's unique text, then selects "Yes, I accept".
+(
+  i=0
+  while [ "$i" -lt 40 ]; do
+    if tmux capture-pane -t main -p 2>/dev/null | grep -q "Yes, I accept"; then
+      tmux send-keys -t main Down
+      sleep 0.3
+      tmux send-keys -t main Enter
+      break
+    fi
+    i=$((i + 1))
+    sleep 0.5
+  done
+) &
+
 exec ttyd --port 7681 --writable -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main
