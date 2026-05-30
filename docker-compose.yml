@@ -38,11 +38,17 @@ x-anthropic-env: &anthropic-env
   CLAUDE_CODE_SUBAGENT_MODEL: ${MODEL_NAME}
 
 x-openai-env: &openai-env
-  OPENAI_API_BASE: ${PROVIDER_BASE_URL}
-  OPENAI_BASE_URL: ${PROVIDER_BASE_URL}
+  # Route OpenAI-protocol harnesses through the auth-service proxy so they get
+  # (a) a free-only, self-updating /v1/models catalog in their pickers and
+  # (b) automatic fallback across free models on rate-limit / deprecation.
+  # The harness still sends PROVIDER_API_KEY as the bearer; the proxy forwards
+  # it to OpenRouter verbatim.  To revert to talking to OpenRouter directly,
+  # set these back to ${PROVIDER_BASE_URL} / ${PROVIDER_ANTHROPIC_URL}.
+  OPENAI_API_BASE: http://harnesses-auth:8080/v1
+  OPENAI_BASE_URL: http://harnesses-auth:8080/v1
   OPENAI_API_KEY: ${PROVIDER_API_KEY}
-  # Goose reads OPENAI_HOST as host-without-/v1; strip the suffix.
-  OPENAI_HOST: ${PROVIDER_ANTHROPIC_URL}
+  # Goose reads OPENAI_HOST as host-without-/v1; it appends /v1 itself.
+  OPENAI_HOST: http://harnesses-auth:8080
 
 services:
   # Hidden image-only service so `docker compose build harness-base` works.
@@ -219,7 +225,9 @@ services:
       - ./data:/workspace/data
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      LLM_BASE_URL: ${PROVIDER_BASE_URL}
+      # Through the auth-service proxy (free catalog + fallback); revert to
+      # ${PROVIDER_BASE_URL} to hit OpenRouter directly.
+      LLM_BASE_URL: http://harnesses-auth:8080/v1
       LLM_MODEL: openai/${MODEL_NAME}
       LLM_API_KEY: ${PROVIDER_API_KEY}
       SANDBOX_RUNTIME_CONTAINER_IMAGE: ghcr.io/all-hands-ai/runtime:0.20-nikolaik

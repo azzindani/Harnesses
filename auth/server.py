@@ -556,6 +556,7 @@ async def _startup() -> None:
     _autofill_tokens_and_log_urls()
     asyncio.create_task(_idle_sweep())
     asyncio.create_task(_retention_sweep())
+    asyncio.create_task(_free_models_sweep())
 
 
 # ── Anthropic-on-OpenAI translation proxy ─────────────────────────────────────
@@ -582,6 +583,110 @@ async def _startup() -> None:
 
 OPENROUTER_OPENAI = "https://openrouter.ai/api/v1/chat/completions"
 _PROXY_CLIENT = httpx.AsyncClient(timeout=httpx.Timeout(300.0))
+
+# ── Free-model catalog (dynamic fallback list) ────────────────────────────────
+# OpenRouter publishes its full model list (public, no auth) at /api/v1/models.
+# We periodically fetch it, keep only the *free* (zero-priced) models that
+# advertise tool-calling, and use that subset two ways:
+#
+#   1. As the ordered `models` fallback array on every upstream request, so a
+#      rate-limited or deprecated primary transparently rolls over to the next
+#      free model — OpenRouter's native model-routing does the failover.
+#   2. As the catalog returned by GET /v1/models, so OpenAI-compatible harness
+#      pickers list exactly the free models, self-updating as OpenRouter adds or
+#      retires them — no manual catalog maintenance.
+#
+# Only free models ever enter the list; paid models are never added as fallback.
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+PRIMARY_MODEL = os.environ.get("MODEL_NAME", "")
+FREE_FALLBACK = os.environ.get("FREE_FALLBACK", "1") not in ("0", "false", "False", "")
+FREE_MODELS_REFRESH_MIN = int(os.environ.get("FREE_MODELS_REFRESH_MIN", "60"))
+FREE_MODELS_LIMIT = int(os.environ.get("FREE_MODELS_LIMIT", "20"))  # cap on fallback array length
+
+# Caches populated by _refresh_free_models().  `_free_model_ids` is the ordered
+# id list (fallback array source); `_free_models_catalog` holds OpenAI-shaped
+# model dicts served by GET /v1/models.
+_free_model_ids: list[str] = []
+_free_models_catalog: list[dict] = []
+_free_models_ts: float = 0.0
+
+
+def _is_free(pricing: dict) -> bool:
+    """A model is free only when both prompt and completion cost nothing."""
+    if not isinstance(pricing, dict):
+        return False
+
+    def _zero(v) -> bool:
+        try:
+            return float(v) == 0.0
+        except (TypeError, ValueError):
+            return False
+
+    return _zero(pricing.get("prompt")) and _zero(pricing.get("completion"))
+
+
+async def _refresh_free_models() -> None:
+    """Fetch OpenRouter's catalog and cache the free, tool-capable subset."""
+    global _free_model_ids, _free_models_catalog, _free_models_ts
+    key = os.environ.get("PROVIDER_API_KEY")
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        resp = await _PROXY_CLIENT.get(OPENROUTER_MODELS_URL, headers=headers)
+        resp.raise_for_status()
+        models = resp.json().get("data", []) or []
+    except Exception as e:
+        log.warning("free-model catalog refresh failed: %s", e)
+        return
+
+    ids: list[str] = []
+    catalog: list[dict] = []
+    for m in models:
+        mid = m.get("id")
+        if not mid or not _is_free(m.get("pricing", {})):
+            continue
+        # Tool-calling is mandatory — the harnesses are useless without it
+        # (see the proxy note below about OpenRouter's tool routing).
+        if "tools" not in (m.get("supported_parameters") or []):
+            continue
+        ids.append(mid)
+        catalog.append({
+            "id": mid,
+            "object": "model",
+            "created": int(m.get("created", 0) or 0),
+            "owned_by": mid.split("/")[0] if "/" in mid else "openrouter",
+            "context_length": m.get("context_length"),
+        })
+
+    if not ids:
+        log.warning("free-model catalog: 0 free tool-capable models found; keeping previous list")
+        return
+
+    _free_model_ids = ids
+    _free_models_catalog = catalog
+    _free_models_ts = time.time()
+    log.info("free-model catalog: %d free tool-capable models", len(ids))
+
+
+async def _free_models_sweep() -> None:
+    """Refresh the catalog at startup and every FREE_MODELS_REFRESH_MIN."""
+    await _refresh_free_models()
+    if FREE_MODELS_REFRESH_MIN <= 0:
+        return
+    while True:
+        await asyncio.sleep(FREE_MODELS_REFRESH_MIN * 60)
+        await _refresh_free_models()
+
+
+def _fallback_models(primary: str) -> list[str]:
+    """Ordered routing list: primary first, then free models (capped)."""
+    out = [primary] if primary else []
+    for mid in _free_model_ids:
+        if mid == primary:
+            continue
+        if len(out) >= FREE_MODELS_LIMIT:
+            break
+        out.append(mid)
+    return out
 
 _FINISH_TO_STOP = {
     "stop": "end_turn",
@@ -900,6 +1005,12 @@ async def proxy_messages(request: Request) -> Response:
 
     openai_body = _anthropic_to_openai_request(payload)
 
+    # Roll over to other free models on rate-limit / deprecation.  Primary
+    # (whatever Claude Code sent, i.e. MODEL_NAME) stays first; only free,
+    # tool-capable models follow — OpenRouter routes through them in order.
+    if FREE_FALLBACK and _free_model_ids:
+        openai_body["models"] = _fallback_models(model)
+
     # Forward only the auth header (Authorization or x-api-key).  Drop the
     # Anthropic-specific headers (anthropic-version, anthropic-beta, etc.) —
     # OpenRouter's OpenAI endpoint doesn't understand them and warns on some.
@@ -947,3 +1058,81 @@ async def proxy_messages(request: Request) -> Response:
         log.exception("translation failed: %s", e)
         return Response(content=upstream.content, status_code=502,
                         media_type=upstream.headers.get("content-type", "application/json"))
+
+
+# ── OpenAI-compat passthrough (for OpenAI-protocol harnesses) ──────────────────
+# Aider, OpenCode, gptme, Goose, Qwen, Codex, Pi, … speak OpenAI natively, so no
+# translation is needed — we just relay to OpenRouter while (a) serving a
+# free-only /v1/models catalog to their pickers and (b) injecting the same free
+# fallback array as the Anthropic proxy.  Point a harness here with
+# OPENAI_API_BASE/OPENAI_BASE_URL=http://harnesses-auth:8080/v1 (or
+# OPENAI_HOST=http://harnesses-auth:8080).  Both /v1/* and /openai/v1/* work.
+
+@app.get("/v1/models")
+@app.get("/openai/v1/models")
+def list_models() -> dict:
+    """Free, tool-capable catalog in OpenAI list shape.
+
+    Falls back to the configured primary model if the catalog hasn't populated
+    yet (startup race / OpenRouter unreachable), so pickers always show ≥1.
+    """
+    data = _free_models_catalog or (
+        [{"id": PRIMARY_MODEL, "object": "model", "created": 0, "owned_by": "openrouter"}]
+        if PRIMARY_MODEL else []
+    )
+    return {"object": "list", "data": data}
+
+
+@app.api_route("/v1/chat/completions", methods=["POST"])
+@app.api_route("/openai/v1/chat/completions", methods=["POST"])
+async def proxy_chat_completions(request: Request) -> Response:
+    body = await request.body()
+    try:
+        payload = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="invalid JSON")
+
+    # Inject the free fallback array unless the caller already set one.  The
+    # harness-supplied model stays primary.
+    if FREE_FALLBACK and _free_model_ids and "models" not in payload:
+        payload["models"] = _fallback_models(payload.get("model", ""))
+
+    streaming = bool(payload.get("stream"))
+    auth_hdr = (
+        request.headers.get("authorization")
+        or (f"Bearer {request.headers.get('x-api-key')}" if request.headers.get("x-api-key") else None)
+    )
+    fwd_headers = {"Content-Type": "application/json"}
+    if auth_hdr:
+        fwd_headers["Authorization"] = auth_hdr
+
+    upstream_request = _PROXY_CLIENT.build_request(
+        "POST", OPENROUTER_OPENAI, json=payload, headers=fwd_headers,
+    )
+
+    if streaming:
+        upstream = await _PROXY_CLIENT.send(upstream_request, stream=True)
+        if upstream.status_code >= 400:
+            text = await upstream.aread()
+            await upstream.aclose()
+            log.warning("openai passthrough %d: %s", upstream.status_code, text[:300])
+            return Response(content=text, status_code=upstream.status_code,
+                            media_type=upstream.headers.get("content-type", "application/json"))
+
+        async def gen():
+            try:
+                async for chunk in upstream.aiter_raw():
+                    yield chunk
+            finally:
+                await upstream.aclose()
+
+        return StreamingResponse(
+            gen(), status_code=200,
+            media_type=upstream.headers.get("content-type", "text/event-stream"),
+        )
+
+    upstream = await _PROXY_CLIENT.send(upstream_request)
+    if upstream.status_code >= 400:
+        log.warning("openai passthrough %d: %s", upstream.status_code, upstream.text[:300])
+    return Response(content=upstream.content, status_code=upstream.status_code,
+                    media_type=upstream.headers.get("content-type", "application/json"))
