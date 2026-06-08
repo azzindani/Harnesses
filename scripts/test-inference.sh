@@ -36,7 +36,7 @@ declare -A CMD=(
   [kilocode]='WEB:8080'                                 # code-server — verify HTTP response
   [codex]='codex exec "$PROMPT"'
   [pi]='pi "$PROMPT"'
-  [droid]=''                                            # factory.ai account login required (FACTORY_API_KEY)
+  [droid]='droid exec -m "$MODEL_NAME" "$PROMPT"'        # BYOK custom model via ~/.factory/settings.json
 )
 ALL=( claude aider opencode crush gptme goose plandex qwencode openhands kilocode codex pi droid )
 TARGETS=( "$@" ); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=( "${ALL[@]}" )
@@ -127,10 +127,11 @@ for h in "${TARGETS[@]}"; do
     fi
 
     # Drive the CLI inside the container with a generous timeout.  Reasoning
-    # models on free tiers can take 30-60s to spit out final content.
+    # models on free tiers (e.g. nemotron-3) can take 60-120s through an
+    # agentic CLI's tool loop before emitting final content.
     log="/tmp/infer-${h}.log"
     start=$(date +%s)
-    docker exec "harness-${h}" sh -c "PROMPT=\"$PROMPT\"; timeout 90 $cmd" \
+    docker exec "harness-${h}" sh -c "PROMPT=\"$PROMPT\"; timeout 150 $cmd" \
         > "$log" 2>&1
     rc=$?
     elapsed=$(( $(date +%s) - start ))
@@ -142,7 +143,7 @@ for h in "${TARGETS[@]}"; do
 
     note=""
     if [ "$rc" = "124" ]; then
-        result=TIMEOUT; note="exceeded 90s; ${bytes}B; $preview"
+        result=TIMEOUT; note="exceeded 150s; ${bytes}B; $preview"
     elif [ "$bytes" -lt 5 ]; then
         result=FAIL; note="no output (rc=${rc})"
     elif printf '%s' "$clean" | grep -qiE 'pong'; then
