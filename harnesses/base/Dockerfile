@@ -23,5 +23,13 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 
 WORKDIR /workspace
 
+# Browser-terminal copy-paste: a transparent ttyd wrapper (earlier in PATH than
+# the real /usr/bin/ttyd) injects a custom index.html that adds in-page
+# Ctrl+C / Ctrl+V copy-paste. Every harness that runs `ttyd` inherits it with no
+# entrypoint change. See ttyd-wrapper.sh / ttyd-kbfix.html.
+COPY ttyd-kbfix.html /opt/ttyd-kbfix.html
+COPY ttyd-wrapper.sh /usr/local/bin/ttyd
+RUN chmod +x /usr/local/bin/ttyd
+
 # ttyd default port. OpenHands/Kilo override (different process).
 EXPOSE 7681
