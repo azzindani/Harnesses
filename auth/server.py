@@ -38,6 +38,9 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
 IDLE_TIMEOUT_MIN = int(os.environ.get("IDLE_TIMEOUT_MIN", "30"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "7"))
+# Cap on concurrently-existing dynamic instances per harness type (the base
+# harness-<type> container is not counted).  0 disables the cap.
+MAX_INSTANCES_PER_HARNESS = int(os.environ.get("MAX_INSTANCES_PER_HARNESS", "5"))
 BASE_DOMAIN = os.environ.get("HARNESS_BASE_DOMAIN", "lab.casava.space")
 COOKIE_NAME = "harness_session"
 CONTAINER_PREFIX = "harness-"
@@ -135,6 +138,22 @@ def _instances_save() -> None:
         log.warning("could not save %s: %s", INSTANCES_FILE, e)
 
 
+def _count_instances(harness_type: str) -> int:
+    """Number of existing dynamic instances of a harness type.
+
+    Counts only auto-created instance containers (tagged with the
+    `harness.type` label by _ensure_instance_container).  The base
+    `harness-<type>` container is created by docker-compose without that
+    label, so it is never counted toward the cap.
+    """
+    try:
+        return len(docker_client.containers.list(
+            all=True, filters={"label": f"harness.type={harness_type}"}))
+    except docker.errors.APIError as e:
+        log.warning("could not list instances for %s: %s — using tracked count", harness_type, e)
+        return sum(1 for m in instances.values() if m.get("harness_type") == harness_type)
+
+
 def _ensure_instance_container(harness_type: str, instance: str) -> str:
     """Create a per-instance container from the base image if it doesn't exist.
 
@@ -150,6 +169,22 @@ def _ensure_instance_container(harness_type: str, instance: str) -> str:
         return name
     except NotFound:
         pass
+
+    # Cap concurrent dynamic instances per harness type.  Reconnecting to an
+    # already-existing instance is never blocked (handled by the early return
+    # above); only the creation of a *new* distinct slug is gated here.
+    if MAX_INSTANCES_PER_HARNESS > 0:
+        n = _count_instances(harness_type)
+        if n >= MAX_INSTANCES_PER_HARNESS:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"instance cap reached for '{harness_type}': "
+                    f"{n}/{MAX_INSTANCES_PER_HARNESS} already running. "
+                    f"Remove an existing {harness_type}-<slug> instance before "
+                    f"creating a new one."
+                ),
+            )
 
     base_name = CONTAINER_PREFIX + harness_type
     try:
@@ -533,9 +568,10 @@ def _autofill_tokens_and_log_urls() -> None:
     for h in HARNESSES:
         log.info("  https://%s.%s/?token=%s", h, BASE_DOMAIN, JWT_SECRET)
     log.info(sep)
-    log.info("Multi-instance pattern — visit any URL of this shape to spin up")
-    log.info("a fresh isolated container + workspace volume (auto-cleanup after %dd", RETENTION_DAYS)
-    log.info("of no activity unless you /pin it):")
+    cap = f"max {MAX_INSTANCES_PER_HARNESS}/harness" if MAX_INSTANCES_PER_HARNESS > 0 else "uncapped"
+    log.info("Multi-instance pattern (%s, idle-stop %dmin) — visit any URL of this", cap, IDLE_TIMEOUT_MIN)
+    log.info("shape to spin up a fresh isolated container + workspace volume")
+    log.info("(auto-cleanup after %dd of no activity unless you /pin it):", RETENTION_DAYS)
     log.info(sep)
     for h in sorted(MULTI_INSTANCE_HARNESSES):
         log.info("  https://%s-<your-slug>.%s/?token=%s", h, BASE_DOMAIN, JWT_SECRET)

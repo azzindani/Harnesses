@@ -49,11 +49,11 @@ echo "  Haiku            = $ANTHROPIC_DEFAULT_HAIKU_MODEL"
 echo "  Custom           = $ANTHROPIC_CUSTOM_MODEL_OPTION"
 echo "  (type '/model <id>' to pick any other free model from the catalog)"
 
-# ── Register external MCP servers (Folio, …) ──────────────────────────────────
+# ── Register external MCP servers (Folio + web search) ────────────────────────
 # Containers are ephemeral, so MCP servers are (re)registered at every boot from
-# env vars rather than baked into a persisted config.  FOLIO_MCP_* come from the
-# shared .env via the compose env_file.  Registered at user scope so the server
-# is available in every /workspace session.
+# env vars rather than baked into a persisted config.  FOLIO_MCP_* / WEB_MCP_URL
+# come from the shared .env via the compose env_file.  Registered at user scope
+# so the servers are available in every /workspace session.
 if [ -n "$FOLIO_MCP_URL" ] && [ -n "$FOLIO_MCP_TOKEN" ]; then
     claude mcp remove --scope user folio >/dev/null 2>&1 || true
     if claude mcp add --scope user --transport http folio "$FOLIO_MCP_URL" \
@@ -61,6 +61,15 @@ if [ -n "$FOLIO_MCP_URL" ] && [ -n "$FOLIO_MCP_TOKEN" ]; then
         echo "MCP: registered 'folio' -> $FOLIO_MCP_URL"
     else
         echo "MCP: WARNING failed to register 'folio'"
+    fi
+fi
+# Web search/fetch (DuckDuckGo sidecar) — no auth header.
+if [ -n "$WEB_MCP_URL" ]; then
+    claude mcp remove --scope user web >/dev/null 2>&1 || true
+    if claude mcp add --scope user --transport http web "$WEB_MCP_URL" >/dev/null 2>&1; then
+        echo "MCP: registered 'web' -> $WEB_MCP_URL"
+    else
+        echo "MCP: WARNING failed to register 'web'"
     fi
 fi
 

@@ -15,6 +15,9 @@ x-harness-defaults: &harness-defaults
   volumes:
     - ./project:/workspace
     - ./data:/workspace/data
+    # Shared tmux config (mouse select + scrollback + clipboard). Harnesses that
+    # override `volumes` re-list this line themselves.
+    - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
   networks:
     - harnesses_net
 
@@ -60,6 +63,19 @@ services:
     profiles: ["build-only"]
     command: ["true"]
 
+  # Free web search/fetch MCP (DuckDuckGo, no API key).  Always-on sidecar on
+  # harnesses_net; every harness registers it by URL (WEB_MCP_URL) the same way
+  # it registers the Folio MCP.  Exposes `search` and `fetch_content` tools.
+  web-mcp:
+    build: ./web-mcp
+    image: harness-web-mcp:latest
+    container_name: web-mcp
+    restart: unless-stopped
+    environment:
+      DDG_SAFE_SEARCH: ${DDG_SAFE_SEARCH:-MODERATE}
+    networks:
+      - harnesses_net
+
   auth:
     build: ./auth
     image: harnesses-auth:latest
@@ -70,6 +86,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       IDLE_TIMEOUT_MIN: ${IDLE_TIMEOUT_MIN:-30}
       RETENTION_DAYS: ${RETENTION_DAYS:-7}
+      MAX_INSTANCES_PER_HARNESS: ${MAX_INSTANCES_PER_HARNESS:-5}
       HARNESS_BASE_DOMAIN: ${HARNESS_BASE_DOMAIN:-lab.casava.space}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -135,6 +152,14 @@ services:
     build: ./harnesses/claude
     image: harness-claude:latest
     container_name: harness-claude
+    # Persist session history (~/.claude: transcripts, history.jsonl, sessions)
+    # across rebuilds/recreates. Configs are re-seeded each boot by the
+    # entrypoint, so only data lives here — safe to keep on a named volume.
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - claude_state:/root/.claude
+      - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
     environment:
       <<: *anthropic-env
 
@@ -152,6 +177,12 @@ services:
     build: ./harnesses/opencode
     image: harness-opencode:latest
     container_name: harness-opencode
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - opencode_state:/root/.local/share/opencode   # sessions
+      - opencode_hist:/root/.local/state/opencode     # prompt history
+      - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
@@ -172,6 +203,11 @@ services:
     build: ./harnesses/gptme
     image: harness-gptme:latest
     container_name: harness-gptme
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - gptme_state:/root/.local/share/gptme         # conversation logs
+      - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
@@ -181,6 +217,11 @@ services:
     build: ./harnesses/goose
     image: harness-goose:latest
     container_name: harness-goose
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - goose_state:/root/.local/share/goose         # sessions
+      - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
@@ -210,6 +251,11 @@ services:
     build: ./harnesses/qwencode
     image: harness-qwencode:latest
     container_name: harness-qwencode
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - qwencode_state:/root/.qwen                    # chat history + settings
+      - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
@@ -224,6 +270,7 @@ services:
       - ./project:/workspace
       - ./data:/workspace/data
       - /var/run/docker.sock:/var/run/docker.sock
+      - openhands_state:/.openhands-state             # conversations/sessions
     environment:
       # Through the auth-service proxy (free catalog + fallback); revert to
       # ${PROVIDER_BASE_URL} to hit OpenRouter directly.
@@ -238,6 +285,12 @@ services:
     build: ./harnesses/kilocode
     image: harness-kilocode:latest
     container_name: harness-kilocode
+    # code-server keeps all user data (incl. Kilo Code chat history under
+    # data/User/globalStorage) in /config — persist it across rebuilds.
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - kilocode_config:/config
     environment:
       MODEL_NAME: ${MODEL_NAME}
       PUID: "1000"
@@ -249,6 +302,11 @@ services:
     build: ./harnesses/codex
     image: harness-codex:latest
     container_name: harness-codex
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - codex_state:/root/.codex                      # sessions (config re-seeded each boot)
+      - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
@@ -267,6 +325,11 @@ services:
     build: ./harnesses/droid
     image: harness-droid:latest
     container_name: harness-droid
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - droid_state:/root/.factory                    # sessions (settings/mcp re-seeded each boot)
+      - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
     environment:
       <<: *anthropic-env
       # FACTORY_API_KEY bypasses droid's interactive /login flow.  Any non-
@@ -285,3 +348,16 @@ volumes:
   # Persisted auth state — instances.json (per-instance retention metadata).
   # Kept across `docker compose down` so multi-instance bookkeeping survives.
   harnesses_data:
+  # Per-harness session-history state — survives rebuilds/recreates so chat
+  # history is not lost on project updates. (aider/crush keep history under
+  # /workspace already; plandex keeps it in plandex_db.)
+  claude_state:
+  codex_state:
+  qwencode_state:
+  droid_state:
+  goose_state:
+  gptme_state:
+  opencode_state:
+  opencode_hist:
+  kilocode_config:
+  openhands_state:
