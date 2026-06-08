@@ -1,0 +1,93 @@
+<script>
+/* lab-kbfix: real Ctrl+C / Ctrl+V copy-paste for the ttyd browser terminal.
+
+   ttyd 1.7.x exposes the live xterm.js Terminal as window.term. We install a
+   custom key handler so the terminal behaves like a normal desktop terminal:
+
+     - Ctrl+C        : if text is selected -> copy it to the OS clipboard (and
+                       clear the selection). If nothing is selected -> fall
+                       through unchanged so it still sends SIGINT (interrupt).
+     - Ctrl+Shift+C  : always copy the current selection.
+     - Ctrl+V        : paste the OS clipboard into the terminal.
+     - Ctrl+Shift+V  : same as Ctrl+V.
+
+   navigator.clipboard needs a secure context (HTTPS) — the lab is served over
+   HTTPS via the shared Caddy router, so this works. The handler is installed
+   in-page, so it is immune to browser/extension key interception differences
+   across machines. Watch the devtools console for the "[lab-kbfix]" line to
+   confirm it attached. */
+(function () {
+  function ready(fn) {
+    if (window.term &&
+        window.term.element &&
+        typeof window.term.attachCustomKeyEventHandler === 'function') {
+      fn(window.term);
+    } else {
+      setTimeout(function () { ready(fn); }, 150);
+    }
+  }
+  ready(function (term) {
+    // Preserve ttyd's own key handler (used for trzsz) if it is reachable, and
+    // defer to it for keys we do not handle. Safe no-op if not reachable.
+    var prev = term._customKeyEventHandler;
+
+    function copySelection() {
+      var sel = term.getSelection();
+      if (sel && sel.length > 0) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(sel).catch(function () {});
+        }
+        term.clearSelection();
+        return true;
+      }
+      return false;
+    }
+    function pasteClipboard() {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        navigator.clipboard.readText().then(function (t) {
+          if (t) term.paste(t);
+        }).catch(function () {});
+        return true;
+      }
+      return false;
+    }
+
+    term.attachCustomKeyEventHandler(function (e) {
+      if (e.type === 'keydown') {
+        var mod = (e.ctrlKey || e.metaKey) && !e.altKey;
+        if (mod) {
+          var k = (e.key || '').toLowerCase();
+          if (k === 'c') {
+            // Ctrl+Shift+C always copies; plain Ctrl+C copies only when there
+            // is a selection, otherwise it must pass through as SIGINT.
+            if (e.shiftKey) {
+              copySelection();
+              e.preventDefault(); e.stopPropagation();
+              return false;
+            }
+            if (copySelection()) {
+              e.preventDefault(); e.stopPropagation();
+              return false;
+            }
+            return true; /* no selection -> let Ctrl+C interrupt */
+          }
+          if (k === 'v') {
+            if (pasteClipboard()) {
+              e.preventDefault(); e.stopPropagation();
+              return false;
+            }
+            return true;
+          }
+        }
+      }
+      if (typeof prev === 'function') {
+        try { return prev(e); } catch (_) {}
+      }
+      return true;
+    });
+    try {
+      console.log('[lab-kbfix] Ctrl+C/Ctrl+V copy-paste handler attached');
+    } catch (_) {}
+  });
+})();
+</script>
