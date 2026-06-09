@@ -8,3 +8,10 @@ __pycache__/
 .venv/
 .claude/
 /tmp/
+
+# Local scratch from inference / Folio-MCP test runs (prompt briefs + raw
+# run logs). Kept on disk for reference but never committed — the .jsonl run
+# logs can capture request headers (bearer tokens) and must not be staged.
+.b_*.txt
+.run_*.jsonl
+.folio-loop-*
