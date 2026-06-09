@@ -1,22 +1,36 @@
 <script>
-/* lab-kbfix: real Ctrl+C / Ctrl+V copy-paste for the ttyd browser terminal.
+/* lab-kbfix: clipboard copy/paste for the ttyd browser terminal.
 
-   ttyd 1.7.x exposes the live xterm.js Terminal as window.term. We install a
-   custom key handler so the terminal behaves like a normal desktop terminal:
+   ttyd 1.7.x exposes the live xterm.js Terminal as window.term but ships no
+   clipboard key bindings, and tmux/TUI mouse-reporting means a plain drag never
+   becomes an xterm selection — so Ctrl+C had nothing to copy. This installs
+   three cooperating mechanisms so "select text -> it's on my clipboard" works
+   everywhere:
 
-     - Ctrl+C        : if text is selected -> copy it to the OS clipboard (and
-                       clear the selection). If nothing is selected -> fall
-                       through unchanged so it still sends SIGINT (interrupt).
-     - Ctrl+Shift+C  : always copy the current selection.
-     - Ctrl+V        : paste the OS clipboard into the terminal.
-     - Ctrl+Shift+V  : same as Ctrl+V.
+     1. OSC 52 bridge — tmux is configured with `set-clipboard on`, so when you
+        drag-select inside tmux it emits an OSC 52 clipboard escape. xterm.js
+        doesn't action OSC 52 by default; we register a handler that decodes it
+        and writes to the real OS clipboard. => mouse-drag copy "just works".
+     2. Copy-on-selection — when xterm itself owns the selection (hold SHIFT and
+        drag inside a full-screen TUI like Claude/Crush/Goose to bypass the
+        app's mouse capture), we copy it to the clipboard automatically.
+     3. Ctrl+C / Ctrl+V keys — Ctrl+C copies the current selection (or passes
+        through as SIGINT when nothing is selected), Ctrl+Shift+C always copies,
+        Ctrl+V / Ctrl+Shift+V paste.
 
-   navigator.clipboard needs a secure context (HTTPS) — the lab is served over
-   HTTPS via the shared Caddy router, so this works. The handler is installed
-   in-page, so it is immune to browser/extension key interception differences
-   across machines. Watch the devtools console for the "[lab-kbfix]" line to
-   confirm it attached. */
+   navigator.clipboard needs a secure context (HTTPS) — the lab is HTTPS via the
+   shared Caddy router. Watch the devtools console for the "[lab-kbfix]" line. */
 (function () {
+  function decodeUtf8(s) { try { return decodeURIComponent(escape(s)); } catch (e) { return s; } }
+
+  function writeClipboard(text) {
+    if (text && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(function () {});
+      return true;
+    }
+    return false;
+  }
+
   function ready(fn) {
     if (window.term &&
         window.term.element &&
@@ -26,68 +40,72 @@
       setTimeout(function () { ready(fn); }, 150);
     }
   }
-  ready(function (term) {
-    // Preserve ttyd's own key handler (used for trzsz) if it is reachable, and
-    // defer to it for keys we do not handle. Safe no-op if not reachable.
-    var prev = term._customKeyEventHandler;
 
+  ready(function (term) {
+    var installed = [];
+
+    /* 1. OSC 52 -> OS clipboard. tmux emits "52;c;<base64>" on copy. */
+    try {
+      if (term.parser && typeof term.parser.registerOscHandler === 'function') {
+        term.parser.registerOscHandler(52, function (data) {
+          try {
+            var semi = data.indexOf(';');
+            var b64 = semi >= 0 ? data.slice(semi + 1) : data;
+            if (b64 && b64 !== '?') writeClipboard(decodeUtf8(atob(b64)));
+          } catch (e) {}
+          return true; /* handled */
+        });
+        installed.push('osc52');
+      }
+    } catch (e) {}
+
+    /* 2. Copy-on-selection for xterm-owned selections (Shift+drag in TUIs). */
+    try {
+      if (typeof term.onSelectionChange === 'function') {
+        term.onSelectionChange(function () {
+          var sel = term.getSelection();
+          if (sel && sel.length > 0) writeClipboard(sel);
+        });
+        installed.push('select');
+      }
+    } catch (e) {}
+
+    /* 3. Ctrl+C / Ctrl+V key handling. */
+    var prev = term._customKeyEventHandler;
     function copySelection() {
       var sel = term.getSelection();
-      if (sel && sel.length > 0) {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(sel).catch(function () {});
-        }
-        term.clearSelection();
-        return true;
-      }
+      if (sel && sel.length > 0) { writeClipboard(sel); term.clearSelection(); return true; }
       return false;
     }
     function pasteClipboard() {
       if (navigator.clipboard && navigator.clipboard.readText) {
-        navigator.clipboard.readText().then(function (t) {
-          if (t) term.paste(t);
-        }).catch(function () {});
+        navigator.clipboard.readText().then(function (t) { if (t) term.paste(t); }).catch(function () {});
         return true;
       }
       return false;
     }
-
     term.attachCustomKeyEventHandler(function (e) {
       if (e.type === 'keydown') {
         var mod = (e.ctrlKey || e.metaKey) && !e.altKey;
         if (mod) {
           var k = (e.key || '').toLowerCase();
           if (k === 'c') {
-            // Ctrl+Shift+C always copies; plain Ctrl+C copies only when there
-            // is a selection, otherwise it must pass through as SIGINT.
-            if (e.shiftKey) {
-              copySelection();
-              e.preventDefault(); e.stopPropagation();
-              return false;
-            }
-            if (copySelection()) {
-              e.preventDefault(); e.stopPropagation();
-              return false;
-            }
+            if (e.shiftKey) { copySelection(); e.preventDefault(); e.stopPropagation(); return false; }
+            if (copySelection()) { e.preventDefault(); e.stopPropagation(); return false; }
             return true; /* no selection -> let Ctrl+C interrupt */
           }
           if (k === 'v') {
-            if (pasteClipboard()) {
-              e.preventDefault(); e.stopPropagation();
-              return false;
-            }
+            if (pasteClipboard()) { e.preventDefault(); e.stopPropagation(); return false; }
             return true;
           }
         }
       }
-      if (typeof prev === 'function') {
-        try { return prev(e); } catch (_) {}
-      }
+      if (typeof prev === 'function') { try { return prev(e); } catch (_) {} }
       return true;
     });
-    try {
-      console.log('[lab-kbfix] Ctrl+C/Ctrl+V copy-paste handler attached');
-    } catch (_) {}
+    installed.push('keys');
+
+    try { console.log('[lab-kbfix] clipboard handlers attached: ' + installed.join(', ')); } catch (_) {}
   });
 })();
 </script>

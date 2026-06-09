@@ -92,6 +92,12 @@ export OPENAI_BASE_URL="${PROVIDER_BASE_URL}"
 export OPENAI_API_KEY="${PROVIDER_API_KEY:-not-used}"
 export GOOSE_MODEL="${MODEL_NAME}"
 
+# Skip the interactive "Share anonymous usage data?" consent prompt that
+# otherwise blocks the session on every boot (the config dir is not persisted,
+# so it reappears each time). GOOSE_TELEMETRY_OFF overrides the unset config
+# and disables telemetry without prompting.
+export GOOSE_TELEMETRY_OFF=1
+
 tmux new-session -d -s main -c /workspace
 tmux send-keys -t main "goose session" Enter
 exec ttyd --port 7681 --writable --check-origin=false -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main

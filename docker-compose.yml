@@ -15,9 +15,12 @@ x-harness-defaults: &harness-defaults
   volumes:
     - ./project:/workspace
     - ./data:/workspace/data
-    # Shared tmux config (mouse select + scrollback + clipboard). Harnesses that
-    # override `volumes` re-list this line themselves.
+    # Shared tmux config (mouse select + scrollback + clipboard) and the ttyd
+    # in-page clipboard handler (ttyd-kbfix.html). Bind-mounted so copy/paste
+    # tweaks need no image rebuild. Harnesses that override `volumes` re-list
+    # both lines themselves.
     - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
+    - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
   networks:
     - harnesses_net
 
@@ -160,6 +163,7 @@ services:
       - ./data:/workspace/data
       - claude_state:/root/.claude
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
+      - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
       <<: *anthropic-env
 
@@ -183,6 +187,7 @@ services:
       - opencode_state:/root/.local/share/opencode   # sessions
       - opencode_hist:/root/.local/state/opencode     # prompt history
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
+      - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
@@ -208,6 +213,7 @@ services:
       - ./data:/workspace/data
       - gptme_state:/root/.local/share/gptme         # conversation logs
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
+      - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
@@ -222,6 +228,7 @@ services:
       - ./data:/workspace/data
       - goose_state:/root/.local/share/goose         # sessions
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
+      - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
@@ -256,6 +263,7 @@ services:
       - ./data:/workspace/data
       - qwencode_state:/root/.qwen                    # chat history + settings
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
+      - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
@@ -307,6 +315,7 @@ services:
       - ./data:/workspace/data
       - codex_state:/root/.codex                      # sessions (config re-seeded each boot)
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
+      - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
@@ -330,11 +339,14 @@ services:
       - ./data:/workspace/data
       - droid_state:/root/.factory                    # sessions (settings/mcp re-seeded each boot)
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
+      - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
       <<: *anthropic-env
-      # FACTORY_API_KEY bypasses droid's interactive /login flow.  Any non-
-      # empty value works for BYOK mode; the actual API auth comes from the
-      # apiKey in ~/.factory/settings.json customModels.
+      # NOTE: as of droid (Factory CLI) v0.143 the *interactive* TUI requires a
+      # Factory account device-login and no longer accepts a fake FACTORY_API_KEY
+      # to bypass it (older versions did). BYOK still works fully NON-interactively
+      # via `droid exec ...`, which uses the customModels apiKey in
+      # ~/.factory/settings.json. We keep FACTORY_API_KEY set for that path.
       FACTORY_API_KEY: byok-${PROVIDER_API_KEY:-not-used}
 
 networks:
