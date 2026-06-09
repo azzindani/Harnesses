@@ -12,6 +12,12 @@ python3 - <<PY
 import json, os
 cfg = {
   "selectedAuthType": "openai",
+  # Disable the self-updater: a mid-session `npm install` leaves the TUI blank
+  # and swallows keystrokes ("can't type"). qwen-code honours these keys both
+  # at top level and under "general", so set them in both places.
+  "disableAutoUpdate": True,
+  "disableUpdateNag": True,
+  "general": {"disableAutoUpdate": True, "disableUpdateNag": True},
   "model": {"name": os.environ["MODEL_NAME"]},
   "modelProviders": {
     "openai": [
