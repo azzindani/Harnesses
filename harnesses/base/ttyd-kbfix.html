@@ -59,7 +59,8 @@
       }
     } catch (e) {}
 
-    /* 2. Copy-on-selection for xterm-owned selections (Shift+drag in TUIs). */
+    /* 2. Copy-on-selection for xterm-owned selections (plain drag with tmux
+       mouse off, or Shift+drag inside a mouse-reporting TUI). */
     try {
       if (typeof term.onSelectionChange === 'function') {
         term.onSelectionChange(function () {
@@ -68,6 +69,18 @@
         });
         installed.push('select');
       }
+    } catch (e) {}
+
+    /* 2b. Copy again on mouse-up — a guaranteed user gesture, so the clipboard
+       write is always permitted (onSelectionChange can fire mid-drag before the
+       gesture settles). This is the reliable path for drag-to-copy. */
+    try {
+      var el = term.element || document;
+      el.addEventListener('mouseup', function () {
+        var sel = term.getSelection();
+        if (sel && sel.length > 0) writeClipboard(sel);
+      });
+      installed.push('mouseup');
     } catch (e) {}
 
     /* 3. Ctrl+C / Ctrl+V key handling. */
