@@ -83,6 +83,10 @@ with open(path, "w") as f:
     f.write("\n")
 PY
 
+# Store crush's session DB in a dedicated volume (/root/.crush-data) instead of
+# /workspace/.crush, so conversations survive recreates AND workspace cleanups.
+mkdir -p /root/.crush-data
+
 tmux new-session -d -s main -c /workspace
-tmux send-keys -t main "crush" Enter
+tmux send-keys -t main "crush --data-dir /root/.crush-data" Enter
 exec ttyd --port 7681 --writable --check-origin=false -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main

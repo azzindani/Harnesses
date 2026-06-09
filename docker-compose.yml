@@ -172,6 +172,12 @@ services:
     build: ./harnesses/aider
     image: harness-aider:latest
     container_name: harness-aider
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - aider_state:/root/.aider                       # chat/input/llm history
+      - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
+      - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
@@ -197,6 +203,12 @@ services:
     build: ./harnesses/crush
     image: harness-crush:latest
     container_name: harness-crush
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - crush_state:/root/.crush-data                  # session DB (--data-dir)
+      - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
+      - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     # Crush auto-activates its built-in OpenAI provider whenever OPENAI_API_KEY
     # exists in env, ignoring crush.json's lab provider entirely.  Skip the
     # openai-env anchor here so only PROVIDER_* (from env_file) is present.
@@ -360,9 +372,11 @@ volumes:
   # Persisted auth state — instances.json (per-instance retention metadata).
   # Kept across `docker compose down` so multi-instance bookkeeping survives.
   harnesses_data:
-  # Per-harness session-history state — survives rebuilds/recreates so chat
-  # history is not lost on project updates. (aider/crush keep history under
-  # /workspace already; plandex keeps it in plandex_db.)
+  # Per-harness session-history state — survives rebuilds/recreates AND workspace
+  # cleanups so chat history is never lost on project updates. Every harness that
+  # stores conversations writes them into its own volume here (aider/crush are
+  # redirected out of /workspace by their entrypoints; plandex keeps plans in
+  # plandex_db; pi is stateless — it does not persist conversations).
   claude_state:
   codex_state:
   qwencode_state:
@@ -373,3 +387,5 @@ volumes:
   opencode_hist:
   kilocode_config:
   openhands_state:
+  aider_state:
+  crush_state:
