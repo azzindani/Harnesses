@@ -175,24 +175,25 @@
         /* ── styles ── */
         var style = document.createElement('style');
         style.textContent =
-          '#lab-fab{position:fixed;bottom:72px;right:12px;z-index:9999;' +
-            'width:48px;height:48px;border-radius:50%;' +
-            'border:2px solid rgba(255,255,255,0.18);' +
-            'background:rgba(18,18,18,0.92);color:#fff;font-size:22px;' +
-            'box-shadow:0 2px 14px rgba(0,0,0,0.55);cursor:pointer;' +
+          /* FAB sits above iOS Safari toolbar (~83px on modern iPhones). */
+          '#lab-fab{position:fixed;bottom:110px;right:14px;z-index:9999;' +
+            'width:54px;height:54px;border-radius:50%;' +
+            'border:2px solid rgba(255,255,255,0.22);' +
+            'background:rgba(18,18,18,0.95);color:#fff;font-size:24px;' +
+            'box-shadow:0 2px 18px rgba(0,0,0,0.65);cursor:pointer;' +
             'display:flex;align-items:center;justify-content:center;' +
             'touch-action:none;user-select:none;}' +
           '#lab-panel{display:none;position:fixed;top:0;left:0;right:0;bottom:0;' +
-            'z-index:10000;background:rgba(0,0,0,0.88);' +
+            'z-index:10000;background:rgba(0,0,0,0.92);' +
             'flex-direction:column;padding:12px;box-sizing:border-box;gap:8px;}' +
           '#lab-panel.open{display:flex;}' +
           '#lab-panel textarea{flex:1;width:100%;background:#1a1a1a;color:#d4d4d4;' +
-            'border:1px solid #444;border-radius:6px;padding:8px;' +
-            'font-family:"JetBrains Mono",Menlo,Consolas,monospace;font-size:12px;' +
+            'border:1px solid #555;border-radius:6px;padding:8px;' +
+            'font-family:"JetBrains Mono",Menlo,Consolas,monospace;font-size:13px;' +
             'resize:none;outline:none;' +
             '-webkit-user-select:text;user-select:text;' +
             '-webkit-touch-callout:default;touch-action:auto;}' +
-          '#lab-panel .lab-urls{max-height:30vh;overflow-y:auto;' +
+          '#lab-panel .lab-urls{max-height:28vh;overflow-y:auto;' +
             'background:#111;border:1px solid #333;border-radius:6px;' +
             'padding:6px 8px;display:flex;flex-direction:column;gap:4px;}' +
           '#lab-panel .lab-urls a{color:#4ec9f0;font-size:13px;' +
@@ -201,8 +202,9 @@
           '#lab-panel .lab-urls a:last-child{border-bottom:none;}' +
           '#lab-panel .lab-urls .lab-no-url{color:#666;font-size:12px;font-style:italic;}' +
           '#lab-panel .lab-row{display:flex;gap:8px;}' +
-          '#lab-panel button{flex:1;padding:11px 8px;border:none;border-radius:6px;' +
-            'font-size:15px;cursor:pointer;-webkit-tap-highlight-color:transparent;}' +
+          '#lab-panel button{flex:1;padding:12px 6px;border:none;border-radius:6px;' +
+            'font-size:14px;cursor:pointer;-webkit-tap-highlight-color:transparent;}' +
+          '#lab-btn-selall{background:#1e4620;color:#9cdcfe;}' +
           '#lab-btn-copy{background:#0e639c;color:#fff;}' +
           '#lab-btn-close{background:#3c3c3c;color:#fff;}';
         document.head.appendChild(style);
@@ -228,12 +230,16 @@
 
         var row = document.createElement('div');
         row.className = 'lab-row';
+        var selAllBtn = document.createElement('button');
+        selAllBtn.id = 'lab-btn-selall';
+        selAllBtn.textContent = 'Select all';
         var copyBtn = document.createElement('button');
         copyBtn.id = 'lab-btn-copy';
         copyBtn.textContent = 'Copy all';
         var closeBtn = document.createElement('button');
         closeBtn.id = 'lab-btn-close';
         closeBtn.textContent = 'Close';
+        row.appendChild(selAllBtn);
         row.appendChild(copyBtn);
         row.appendChild(closeBtn);
 
@@ -243,18 +249,29 @@
 
         /* ── helpers ── */
         function getVisibleText() {
+          /* Method 1: buffer API — reads ~2 screens around the viewport. */
           try {
             var buf = term.buffer.active;
-            var from = Math.max(0, buf.viewportY - term.rows);
-            var to   = buf.viewportY + term.rows;
+            var vp   = buf.viewportY;
+            var from = Math.max(0, vp - term.rows);
+            var to   = vp + term.rows;
             var lines = [];
             for (var i = from; i < to; i++) {
               var ln = buf.getLine(i);
               if (ln) lines.push(ln.translateToString(true));
             }
             while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-            return lines.join('\n');
-          } catch (e) { return ''; }
+            var r1 = lines.join('\n');
+            if (r1.trim().length > 0) return r1;
+          } catch (e) {}
+          /* Method 2: selectAll fallback — whole buffer, last 8 000 chars. */
+          try {
+            term.selectAll();
+            var all = term.getSelection() || '';
+            term.clearSelection();
+            return all.length > 8000 ? all.slice(-8000) : all;
+          } catch (e) {}
+          return '';
         }
 
         function extractUrls(text) {
@@ -302,6 +319,13 @@
           openPanel();
         }, { passive: false });
         fab.addEventListener('click', openPanel);
+
+        /* "Select all" — focuses textarea and selects everything so iOS/Android
+           show the native selection handles + system Copy callout. */
+        selAllBtn.addEventListener('click', function () {
+          try { ta.focus({ preventScroll: true }); } catch (e) { ta.focus(); }
+          ta.setSelectionRange(0, ta.value.length);
+        });
 
         copyBtn.addEventListener('click', function () {
           writeClipboard(ta.value);
