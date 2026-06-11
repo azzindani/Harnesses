@@ -43,8 +43,13 @@ if not isinstance(cfg, dict):
 # Base settings (this entrypoint is the source of truth for these).
 cfg["GOOSE_PROVIDER"] = "openai"
 cfg["GOOSE_MODEL"] = os.environ.get("MODEL_NAME", "")
-cfg["OPENAI_HOST"] = os.environ.get("PROVIDER_ANTHROPIC_URL", "")
-cfg["OPENAI_BASE_URL"] = os.environ.get("PROVIDER_BASE_URL", "")
+# Route through the auth-service proxy (free catalog + fallback).
+# OPENAI_HOST is the host without /v1; goose appends /v1 itself.
+# These match the compose x-openai-env anchor values.
+_pb = os.environ.get("PROVIDER_BASE_URL", "")
+_host_fallback = _pb[:-3] if _pb.endswith("/v1") else _pb
+cfg["OPENAI_HOST"] = os.environ.get("OPENAI_HOST", _host_fallback)
+cfg["OPENAI_BASE_URL"] = os.environ.get("OPENAI_BASE_URL", _pb)
 
 ext = cfg.get("extensions")
 if not isinstance(ext, dict):
@@ -87,9 +92,9 @@ with open(path, "w") as f:
 PY
 
 export GOOSE_PROVIDER="openai"
-export OPENAI_HOST="${PROVIDER_ANTHROPIC_URL}"
-export OPENAI_BASE_URL="${PROVIDER_BASE_URL}"
-export OPENAI_API_KEY="${PROVIDER_API_KEY:-not-used}"
+# OPENAI_HOST / OPENAI_BASE_URL are already set by the compose x-openai-env anchor
+# to the auth-service proxy; don't override them with raw provider URLs here.
+export OPENAI_API_KEY="${OPENAI_API_KEY:-${PROVIDER_API_KEY:-not-used}}"
 export GOOSE_MODEL="${MODEL_NAME}"
 
 # Skip the interactive "Share anonymous usage data?" consent prompt that

@@ -1,10 +1,10 @@
 #!/bin/sh
 set -e
 
-# Aider uses OpenAI-compatible env vars.  Model id is prefixed with `openai/`
-# so Aider routes via its OpenAI provider rather than guessing from MODEL_NAME.
-export OPENAI_API_BASE="${PROVIDER_BASE_URL}"
-export OPENAI_API_KEY="${PROVIDER_API_KEY:-not-used}"
+# Aider uses OpenAI-compatible env vars.  OPENAI_API_BASE/KEY come from the
+# compose x-openai-env anchor (routed through the auth-service proxy for free
+# catalog + fallback).  OPENAI_API_KEY is already set; just ensure it's present.
+export OPENAI_API_KEY="${OPENAI_API_KEY:-${PROVIDER_API_KEY:-not-used}}"
 
 # Persist chat/input/llm history in a dedicated volume (/root/.aider) instead of
 # the shared /workspace, so it survives recreates AND workspace cleanups. By

@@ -1,25 +1,24 @@
 <script>
-/* lab-kbfix: clipboard copy/paste for the ttyd browser terminal.
+/* lab-kbfix: clipboard copy/paste + mobile UX for the ttyd browser terminal.
 
-   ttyd 1.7.x exposes the live xterm.js Terminal as window.term but ships no
-   clipboard key bindings, and tmux/TUI mouse-reporting means a plain drag never
-   becomes an xterm selection — so Ctrl+C had nothing to copy. This installs
-   three cooperating mechanisms so "select text -> it's on my clipboard" works
-   everywhere:
+   Desktop mechanisms (already present):
+   1. OSC 52 bridge — tmux `set-clipboard on` emits OSC 52; we decode and write
+      it to the OS clipboard so drag-select inside tmux "just works".
+   2. Copy-on-selection — xterm-owned selections (Shift+drag past a TUI's mouse
+      capture) are auto-copied on selection-change.
+   2b. mouseup copy — reliable copy after drag settles.
+   3. Ctrl+C / Ctrl+V key handling.
 
-     1. OSC 52 bridge — tmux is configured with `set-clipboard on`, so when you
-        drag-select inside tmux it emits an OSC 52 clipboard escape. xterm.js
-        doesn't action OSC 52 by default; we register a handler that decodes it
-        and writes to the real OS clipboard. => mouse-drag copy "just works".
-     2. Copy-on-selection — when xterm itself owns the selection (hold SHIFT and
-        drag inside a full-screen TUI like Claude/Crush/Goose to bypass the
-        app's mouse capture), we copy it to the clipboard automatically.
-     3. Ctrl+C / Ctrl+V keys — Ctrl+C copies the current selection (or passes
-        through as SIGINT when nothing is selected), Ctrl+Shift+C always copies,
-        Ctrl+V / Ctrl+Shift+V paste.
-
-   navigator.clipboard needs a secure context (HTTPS) — the lab is HTTPS via the
-   shared Caddy router. Watch the devtools console for the "[lab-kbfix]" line. */
+   Mobile additions:
+   4. touchend copy — mirrors mouseup so touch-selections are auto-copied.
+   5. URL link provider — registerLinkProvider makes every http/https URL in the
+      terminal output click/tap-able; tap opens in a new tab.
+   6. Mobile panel — a floating 📋 button (only shown on touch devices) opens a
+      panel with the visible terminal text in a native <textarea> (fully
+      selectable on mobile) plus a tappable list of URLs found in that text.
+      Tap "Copy all" to copy everything; long-press in the textarea to select
+      any range with the native handles.
+*/
 (function () {
   function decodeUtf8(s) { try { return decodeURIComponent(escape(s)); } catch (e) { return s; } }
 
@@ -53,14 +52,13 @@
             var b64 = semi >= 0 ? data.slice(semi + 1) : data;
             if (b64 && b64 !== '?') writeClipboard(decodeUtf8(atob(b64)));
           } catch (e) {}
-          return true; /* handled */
+          return true;
         });
         installed.push('osc52');
       }
     } catch (e) {}
 
-    /* 2. Copy-on-selection for xterm-owned selections (plain drag with tmux
-       mouse off, or Shift+drag inside a mouse-reporting TUI). */
+    /* 2. Copy-on-selection for xterm-owned selections. */
     try {
       if (typeof term.onSelectionChange === 'function') {
         term.onSelectionChange(function () {
@@ -71,9 +69,7 @@
       }
     } catch (e) {}
 
-    /* 2b. Copy again on mouse-up — a guaranteed user gesture, so the clipboard
-       write is always permitted (onSelectionChange can fire mid-drag before the
-       gesture settles). This is the reliable path for drag-to-copy. */
+    /* 2b. mouseup — reliable copy after drag settles. */
     try {
       var el = term.element || document;
       el.addEventListener('mouseup', function () {
@@ -105,7 +101,7 @@
           if (k === 'c') {
             if (e.shiftKey) { copySelection(); e.preventDefault(); e.stopPropagation(); return false; }
             if (copySelection()) { e.preventDefault(); e.stopPropagation(); return false; }
-            return true; /* no selection -> let Ctrl+C interrupt */
+            return true;
           }
           if (k === 'v') {
             if (pasteClipboard()) { e.preventDefault(); e.stopPropagation(); return false; }
@@ -118,7 +114,212 @@
     });
     installed.push('keys');
 
-    try { console.log('[lab-kbfix] clipboard handlers attached: ' + installed.join(', ')); } catch (_) {}
+    /* 4. Touch-based copy (mirrors mouseup for touch screens). */
+    try {
+      var tel = term.element || document;
+      tel.addEventListener('touchend', function () {
+        var sel = term.getSelection();
+        if (sel && sel.length > 0) writeClipboard(sel);
+      });
+      installed.push('touch');
+    } catch (e) {}
+
+    /* 5. URL link provider — click/tap to open in new tab.
+       Works on desktop (hover underline + click) and mobile (tap).
+       provideLinks(y) receives the 1-based viewport row; range coords must
+       also be viewport-relative (not buffer-absolute). */
+    try {
+      if (typeof term.registerLinkProvider === 'function') {
+        var linkRe = /https?:\/\/[^\s"'<>[\](){}\\]+/g;
+        term.registerLinkProvider({
+          provideLinks: function (y, cb) {
+            try {
+              var bufY = term.buffer.active.viewportY + y - 1;
+              var line = term.buffer.active.getLine(bufY);
+              if (!line) { cb(undefined); return; }
+              var text = line.translateToString(true);
+              linkRe.lastIndex = 0;
+              var m, links = [];
+              while ((m = linkRe.exec(text)) !== null) {
+                (function (url, col, row) {
+                  links.push({
+                    range: {
+                      start: { x: col + 1,           y: row },
+                      end:   { x: col + url.length,  y: row }
+                    },
+                    text: url,
+                    activate: function (_, u) {
+                      window.open(u, '_blank', 'noopener,noreferrer');
+                    }
+                  });
+                })(m[0], m.index, y);
+              }
+              cb(links.length ? links : undefined);
+            } catch (e) { cb(undefined); }
+          }
+        });
+        installed.push('links');
+      }
+    } catch (e) {}
+
+    /* 6. Mobile panel — floating 📋 button + output / URL panel.
+       Only injected on touch-capable devices so desktop layout is untouched.
+       The panel contains:
+         - a read-only <textarea> with the last 2 screens of terminal text
+           (long-press → native selection handles on iOS/Android)
+         - a "Copy all" button
+         - a tappable list of URLs found in the captured text          */
+    try {
+      if (navigator.maxTouchPoints > 0 || ('ontouchstart' in window)) {
+
+        /* ── styles ── */
+        var style = document.createElement('style');
+        style.textContent =
+          '#lab-fab{position:fixed;bottom:72px;right:12px;z-index:9999;' +
+            'width:48px;height:48px;border-radius:50%;' +
+            'border:2px solid rgba(255,255,255,0.18);' +
+            'background:rgba(18,18,18,0.92);color:#fff;font-size:22px;' +
+            'box-shadow:0 2px 14px rgba(0,0,0,0.55);cursor:pointer;' +
+            'display:flex;align-items:center;justify-content:center;' +
+            'touch-action:none;user-select:none;}' +
+          '#lab-panel{display:none;position:fixed;top:0;left:0;right:0;bottom:0;' +
+            'z-index:10000;background:rgba(0,0,0,0.88);' +
+            'flex-direction:column;padding:12px;box-sizing:border-box;gap:8px;}' +
+          '#lab-panel.open{display:flex;}' +
+          '#lab-panel textarea{flex:1;width:100%;background:#1a1a1a;color:#d4d4d4;' +
+            'border:1px solid #444;border-radius:6px;padding:8px;' +
+            'font-family:"JetBrains Mono",Menlo,Consolas,monospace;font-size:12px;' +
+            'resize:none;outline:none;' +
+            '-webkit-user-select:text;user-select:text;' +
+            '-webkit-touch-callout:default;touch-action:auto;}' +
+          '#lab-panel .lab-urls{max-height:30vh;overflow-y:auto;' +
+            'background:#111;border:1px solid #333;border-radius:6px;' +
+            'padding:6px 8px;display:flex;flex-direction:column;gap:4px;}' +
+          '#lab-panel .lab-urls a{color:#4ec9f0;font-size:13px;' +
+            'font-family:monospace;word-break:break-all;padding:4px 0;' +
+            'text-decoration:none;border-bottom:1px solid #222;}' +
+          '#lab-panel .lab-urls a:last-child{border-bottom:none;}' +
+          '#lab-panel .lab-urls .lab-no-url{color:#666;font-size:12px;font-style:italic;}' +
+          '#lab-panel .lab-row{display:flex;gap:8px;}' +
+          '#lab-panel button{flex:1;padding:11px 8px;border:none;border-radius:6px;' +
+            'font-size:15px;cursor:pointer;-webkit-tap-highlight-color:transparent;}' +
+          '#lab-btn-copy{background:#0e639c;color:#fff;}' +
+          '#lab-btn-close{background:#3c3c3c;color:#fff;}';
+        document.head.appendChild(style);
+
+        /* ── FAB button ── */
+        var fab = document.createElement('button');
+        fab.id = 'lab-fab';
+        fab.textContent = '📋';
+        fab.setAttribute('aria-label', 'Copy / view terminal output');
+
+        /* ── Panel ── */
+        var panel = document.createElement('div');
+        panel.id = 'lab-panel';
+
+        var ta = document.createElement('textarea');
+        ta.setAttribute('autocomplete', 'off');
+        ta.setAttribute('autocorrect', 'off');
+        ta.setAttribute('autocapitalize', 'off');
+        ta.setAttribute('spellcheck', 'false');
+
+        var urlBox = document.createElement('div');
+        urlBox.className = 'lab-urls';
+
+        var row = document.createElement('div');
+        row.className = 'lab-row';
+        var copyBtn = document.createElement('button');
+        copyBtn.id = 'lab-btn-copy';
+        copyBtn.textContent = 'Copy all';
+        var closeBtn = document.createElement('button');
+        closeBtn.id = 'lab-btn-close';
+        closeBtn.textContent = 'Close';
+        row.appendChild(copyBtn);
+        row.appendChild(closeBtn);
+
+        panel.appendChild(ta);
+        panel.appendChild(urlBox);
+        panel.appendChild(row);
+
+        /* ── helpers ── */
+        function getVisibleText() {
+          try {
+            var buf = term.buffer.active;
+            var from = Math.max(0, buf.viewportY - term.rows);
+            var to   = buf.viewportY + term.rows;
+            var lines = [];
+            for (var i = from; i < to; i++) {
+              var ln = buf.getLine(i);
+              if (ln) lines.push(ln.translateToString(true));
+            }
+            while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+            return lines.join('\n');
+          } catch (e) { return ''; }
+        }
+
+        function extractUrls(text) {
+          var re = /https?:\/\/[^\s"'<>[\](){}\\]+/g;
+          var urls = [], m, seen = {};
+          while ((m = re.exec(text)) !== null) {
+            var u = m[0].replace(/[.,;:!?]+$/, '');
+            if (!seen[u]) { seen[u] = true; urls.push(u); }
+          }
+          return urls;
+        }
+
+        function openPanel() {
+          var sel = term.getSelection();
+          var content = (sel && sel.length > 0) ? sel : getVisibleText();
+          ta.value = content;
+
+          /* populate URL list */
+          urlBox.innerHTML = '';
+          var urls = extractUrls(content);
+          if (urls.length === 0) {
+            var empty = document.createElement('span');
+            empty.className = 'lab-no-url';
+            empty.textContent = 'No URLs in visible output';
+            urlBox.appendChild(empty);
+          } else {
+            urls.forEach(function (u) {
+              var a = document.createElement('a');
+              a.href = u;
+              a.target = '_blank';
+              a.rel = 'noopener noreferrer';
+              a.textContent = u;
+              urlBox.appendChild(a);
+            });
+          }
+
+          panel.classList.add('open');
+          /* move cursor to end so the most recent output is visible */
+          setTimeout(function () { ta.scrollTop = ta.scrollHeight; }, 50);
+        }
+
+        /* ── wire events ── */
+        fab.addEventListener('touchstart', function (e) {
+          e.preventDefault();
+          openPanel();
+        }, { passive: false });
+        fab.addEventListener('click', openPanel);
+
+        copyBtn.addEventListener('click', function () {
+          writeClipboard(ta.value);
+          copyBtn.textContent = '✅ Copied!';
+          setTimeout(function () { copyBtn.textContent = 'Copy all'; }, 1500);
+        });
+        closeBtn.addEventListener('click', function () { panel.classList.remove('open'); });
+        panel.addEventListener('click', function (e) {
+          if (e.target === panel) panel.classList.remove('open');
+        });
+
+        document.body.appendChild(fab);
+        document.body.appendChild(panel);
+        installed.push('mobile-panel');
+      }
+    } catch (e) {}
+
+    try { console.log('[lab-kbfix] handlers: ' + installed.join(', ')); } catch (_) {}
   });
 })();
 </script>

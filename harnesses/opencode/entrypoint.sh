@@ -17,7 +17,7 @@ config = {
         "lab": {
             "npm": "@ai-sdk/openai-compatible",
             "options": {
-                "baseURL": os.environ.get("PROVIDER_BASE_URL", ""),
+                "baseURL": os.environ.get("OPENAI_BASE_URL") or os.environ.get("PROVIDER_BASE_URL", ""),
                 "apiKey": os.environ.get("PROVIDER_API_KEY") or "not-used",
             },
             "models": {
