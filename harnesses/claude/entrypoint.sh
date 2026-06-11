@@ -33,10 +33,6 @@ export ANTHROPIC_DEFAULT_OPUS_MODEL="${M2:-$M1}"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="${M3:-$M1}"
 export ANTHROPIC_CUSTOM_MODEL_OPTION="${M4:-${M2:-$M1}}"
 
-# Pin the configured primary (Nemotron / MODEL_NAME) as the active model so
-# every session starts on it; the picker still lets you switch to the others.
-export ANTHROPIC_MODEL="$M1"
-
 # Gateway model discovery: Claude Code queries ${ANTHROPIC_BASE_URL}/v1/models at
 # startup and adds the full free catalog to the /model picker (labelled "From
 # gateway"), so all free models are pickable — not just the 4 tier slots above.

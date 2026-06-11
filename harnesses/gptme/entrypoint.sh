@@ -11,7 +11,7 @@ PROVIDER_API_KEY = "${PROVIDER_API_KEY:-not-used}"
 
 [[providers]]
 name = "lab"
-base_url = "${PROVIDER_BASE_URL}"
+base_url = "${OPENAI_BASE_URL:-${PROVIDER_BASE_URL}}"
 api_key_env = "PROVIDER_API_KEY"
 default_model = "${MODEL_NAME}"
 EOF

@@ -24,7 +24,7 @@ cfg = {
       {
         "id": os.environ["MODEL_NAME"],
         "envKey": "OPENAI_API_KEY",
-        "baseUrl": os.environ["PROVIDER_BASE_URL"],
+        "baseUrl": os.environ.get("OPENAI_BASE_URL") or os.environ["PROVIDER_BASE_URL"],
       }
     ]
   }
