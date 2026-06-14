@@ -808,6 +808,55 @@ _FINISH_TO_STOP = {
 }
 
 
+def _normalize_schema(node):
+    """In-place fix of a JSON-Schema fragment for strict validators — notably
+    Google Gemini (reached via OpenRouter), which 400s with
+    `predicate failed: $type == Type.ARRAY` when a property carries `items`
+    without `type: "array"`, and which also requires every array to declare
+    `items`.  Both transforms keep the schema valid JSON Schema, so lenient
+    providers are unaffected.  Walks every place a subschema can nest.
+    """
+    if isinstance(node, list):
+        for item in node:
+            _normalize_schema(item)
+        return node
+    if not isinstance(node, dict):
+        return node
+    props = node.get("properties")
+    if isinstance(props, dict):
+        for v in props.values():
+            _normalize_schema(v)
+    for key in ("items", "additionalProperties", "not"):
+        if isinstance(node.get(key), dict):
+            _normalize_schema(node[key])
+    for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
+        if isinstance(node.get(key), list):
+            for v in node[key]:
+                _normalize_schema(v)
+    defs = node.get("$defs") or node.get("definitions")
+    if isinstance(defs, dict):
+        for v in defs.values():
+            _normalize_schema(v)
+    # `items` is only meaningful on arrays; some tool schemas omit/mistype it.
+    if "items" in node and node.get("type") != "array":
+        node["type"] = "array"
+    # Gemini rejects an array with no `items`; give it a permissive default.
+    if node.get("type") == "array" and "items" not in node:
+        node["items"] = {"type": "string"}
+    return node
+
+
+def _sanitize_tools(tools):
+    """Normalize each tool's parameter schema for cross-provider compatibility."""
+    if not isinstance(tools, list):
+        return tools
+    for t in tools:
+        fn = t.get("function") if isinstance(t, dict) else None
+        if isinstance(fn, dict) and isinstance(fn.get("parameters"), dict):
+            _normalize_schema(fn["parameters"])
+    return tools
+
+
 def _anthropic_to_openai_request(payload: dict) -> dict:
     """Translate an Anthropic /v1/messages body → OpenAI /v1/chat/completions."""
     out: dict = {"model": payload.get("model"), "messages": []}
@@ -888,7 +937,7 @@ def _anthropic_to_openai_request(payload: dict) -> dict:
     # Tools: Anthropic {name, description, input_schema} → OpenAI function schema.
     tools = payload.get("tools")
     if tools:
-        out["tools"] = [
+        out["tools"] = _sanitize_tools([
             {
                 "type": "function",
                 "function": {
@@ -898,7 +947,7 @@ def _anthropic_to_openai_request(payload: dict) -> dict:
                 },
             }
             for t in tools
-        ]
+        ])
 
     tc = payload.get("tool_choice")
     if isinstance(tc, dict):
@@ -1234,6 +1283,10 @@ async def proxy_chat_completions(request: Request) -> Response:
     # harness-supplied model stays primary.
     if FREE_FALLBACK and _free_model_ids and "models" not in payload:
         payload["models"] = _fallback_models(payload.get("model", ""))
+
+    # Normalize tool schemas so strict providers (Google Gemini) don't 400.
+    if isinstance(payload.get("tools"), list):
+        _sanitize_tools(payload["tools"])
 
     streaming = bool(payload.get("stream"))
     auth_hdr = (
