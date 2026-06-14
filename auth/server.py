@@ -981,12 +981,39 @@ def _anthropic_to_openai_request(payload: dict) -> dict:
     return out
 
 
-def _openai_to_anthropic_response(data: dict) -> dict:
+def _norm_model(m: str) -> str:
+    """Strip the :free/:nitro variant tag for model-identity comparison."""
+    return (m or "").split(":")[0]
+
+
+def _model_switched(requested: str, served: str) -> bool:
+    """True only when `served` is a genuinely different model than `requested`.
+
+    Ignores variant tags and dated-snapshot suffixes — OpenRouter serves e.g.
+    `google/gemma-4-31b-it:free` as `google/gemma-4-31b-it-20260402:free`, which
+    is the same model and must NOT be reported as a fallback.
+    """
+    if not requested or not served:
+        return False
+    r, s = _norm_model(requested), _norm_model(served)
+    return not (s == r or s.startswith(r) or r.startswith(s))
+
+
+def _switch_notice(requested: str, served: str) -> str:
+    """One-line, human-visible note prepended to a reply when fallback kicked in."""
+    return f"↳ {requested} unavailable\n  → answered by {served}\n\n"
+
+
+def _openai_to_anthropic_response(data: dict, requested: str = "") -> dict:
     """OpenAI chat.completion → Anthropic /v1/messages non-streaming response."""
     choice = (data.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
 
     content: list = []
+    served = data.get("model", "")
+    if _model_switched(requested, served):
+        log.warning("fallback: requested %s -> served %s", requested, served)
+        content.append({"type": "text", "text": _switch_notice(requested, served)})
     text = msg.get("content")
     if text:
         content.append({"type": "text", "text": text})
@@ -1036,20 +1063,6 @@ async def _translate_stream(upstream: httpx.Response, model: str, msg_id: str):
     def sse(event: str, data: dict) -> bytes:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
-    yield sse("message_start", {
-        "type": "message_start",
-        "message": {
-            "id": msg_id,
-            "type": "message",
-            "role": "assistant",
-            "model": model,
-            "content": [],
-            "stop_reason": None,
-            "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
-        },
-    })
-
     text_block_open = False
     text_block_index = -1
     # tool_call index (from OpenAI) → block index in Anthropic stream
@@ -1057,6 +1070,22 @@ async def _translate_stream(upstream: httpx.Response, model: str, msg_id: str):
     next_block_index = 0
     final_finish: str | None = None
     final_usage: dict = {}
+    started = False
+
+    def _message_start(served: str) -> bytes:
+        return sse("message_start", {
+            "type": "message_start",
+            "message": {
+                "id": msg_id,
+                "type": "message",
+                "role": "assistant",
+                "model": served,
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            },
+        })
 
     async for raw in upstream.aiter_lines():
         if not raw.startswith("data: "):
@@ -1068,6 +1097,29 @@ async def _translate_stream(upstream: httpx.Response, model: str, msg_id: str):
             chunk = json.loads(body)
         except json.JSONDecodeError:
             continue
+
+        # Emit message_start lazily, using the model the upstream actually
+        # served — so a fallback is reported truthfully, not as the requested
+        # model.  If it differs, lead with a one-line, visible switch notice.
+        if not started:
+            served = chunk.get("model") or model
+            yield _message_start(served)
+            if _model_switched(model, served):
+                log.warning("fallback (stream): requested %s -> served %s", model, served)
+                ni = next_block_index
+                next_block_index += 1
+                yield sse("content_block_start", {
+                    "type": "content_block_start",
+                    "index": ni,
+                    "content_block": {"type": "text", "text": ""},
+                })
+                yield sse("content_block_delta", {
+                    "type": "content_block_delta",
+                    "index": ni,
+                    "delta": {"type": "text_delta", "text": _switch_notice(model, served)},
+                })
+                yield sse("content_block_stop", {"type": "content_block_stop", "index": ni})
+            started = True
 
         if chunk.get("usage"):
             final_usage = chunk["usage"]
@@ -1133,6 +1185,10 @@ async def _translate_stream(upstream: httpx.Response, model: str, msg_id: str):
 
         if choice.get("finish_reason"):
             final_finish = choice["finish_reason"]
+
+    # If the upstream sent no data chunks, still emit a valid message envelope.
+    if not started:
+        yield _message_start(model)
 
     # Close any blocks still open.
     if text_block_open:
@@ -1219,7 +1275,7 @@ async def proxy_messages(request: Request) -> Response:
                         media_type=upstream.headers.get("content-type", "application/json"))
     try:
         data = upstream.json()
-        translated = _openai_to_anthropic_response(data)
+        translated = _openai_to_anthropic_response(data, model)
         return Response(content=json.dumps(translated), status_code=200,
                         media_type="application/json")
     except Exception as e:
@@ -1310,10 +1366,56 @@ async def proxy_chat_completions(request: Request) -> Response:
             return Response(content=text, status_code=upstream.status_code,
                             media_type=upstream.headers.get("content-type", "application/json"))
 
+        requested = payload.get("model", "")
+
         async def gen():
+            # Buffer only until the first real `data:` event arrives (OpenRouter
+            # often leads with `: OPENROUTER PROCESSING` comment lines), read the
+            # model it actually served, and — if that differs from the requested
+            # model — inject a visible switch-notice chunk before relaying the
+            # rest byte-for-byte.
+            buf = b""
+            head_done = False
+
+            def _served_from(buffer: bytes):
+                """First served model in any complete data: event, or None if
+                none has fully arrived yet (keep buffering)."""
+                for ev in buffer.split(b"\n\n"):
+                    for line in ev.split(b"\n"):
+                        if line.startswith(b"data: "):
+                            pl = line[6:].strip()
+                            if not pl or pl == b"[DONE]":
+                                return ""
+                            try:
+                                return (json.loads(pl) or {}).get("model", "") or ""
+                            except json.JSONDecodeError:
+                                return None  # partial JSON — wait for more
+                return None
+
             try:
                 async for chunk in upstream.aiter_raw():
-                    yield chunk
+                    if head_done:
+                        yield chunk
+                        continue
+                    buf += chunk
+                    if b"\n\n" not in buf:
+                        continue
+                    served = _served_from(buf)
+                    if served is None:
+                        continue  # only comments / partial so far — keep buffering
+                    head_done = True
+                    if _model_switched(requested, served):
+                        log.warning("fallback (stream): requested %s -> served %s", requested, served)
+                        notice = {
+                            "id": "", "object": "chat.completion.chunk", "model": served,
+                            "choices": [{"index": 0, "finish_reason": None, "delta": {
+                                "role": "assistant", "content": _switch_notice(requested, served)}}],
+                        }
+                        yield ("data: " + json.dumps(notice) + "\n\n").encode()
+                    yield buf
+                    buf = b""
+                if buf:
+                    yield buf
             finally:
                 await upstream.aclose()
 
@@ -1325,5 +1427,22 @@ async def proxy_chat_completions(request: Request) -> Response:
     upstream = await _PROXY_CLIENT.send(upstream_request)
     if upstream.status_code >= 400:
         log.warning("openai passthrough %d: %s", upstream.status_code, upstream.text[:300])
-    return Response(content=upstream.content, status_code=upstream.status_code,
-                    media_type=upstream.headers.get("content-type", "application/json"))
+        return Response(content=upstream.content, status_code=upstream.status_code,
+                        media_type=upstream.headers.get("content-type", "application/json"))
+
+    # Success: surface a fallback (served ≠ requested) with a leading notice.
+    requested = payload.get("model", "")
+    try:
+        data = upstream.json()
+        served = data.get("model", "")
+        if _model_switched(requested, served):
+            log.warning("fallback: requested %s -> served %s", requested, served)
+            ch = (data.get("choices") or [{}])[0]
+            msg = ch.get("message")
+            if isinstance(msg, dict):
+                msg["content"] = _switch_notice(requested, served) + (msg.get("content") or "")
+        return Response(content=json.dumps(data), status_code=200,
+                        media_type="application/json")
+    except (ValueError, json.JSONDecodeError):
+        return Response(content=upstream.content, status_code=upstream.status_code,
+                        media_type=upstream.headers.get("content-type", "application/json"))
