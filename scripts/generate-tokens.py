@@ -31,8 +31,6 @@ HARNESSES = [
     "goose",
     "plandex",
     "qwencode",
-    "openhands",
-    "kilocode",
     "codex",
     "pi",
     "droid",

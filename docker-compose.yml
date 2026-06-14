@@ -4,7 +4,7 @@ name: harnesses
 #   docker compose build harness-base
 # Then bring everything up:
 #   docker compose up -d auth                  # always-on
-# The 13 harness services live under the `on-demand` profile so they do not
+# The 11 harness services live under the `on-demand` profile so they do not
 # auto-start.  The auth service starts them on first authenticated request and
 # stops them after IDLE_TIMEOUT_MIN minutes idle.
 
@@ -280,43 +280,6 @@ services:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
 
-  harness-openhands:
-    <<: *harness-defaults
-    build: ./harnesses/openhands
-    image: harness-openhands:latest
-    container_name: harness-openhands
-    # OpenHands itself launches sandbox containers — needs the docker socket.
-    volumes:
-      - ./project:/workspace
-      - ./data:/workspace/data
-      - /var/run/docker.sock:/var/run/docker.sock
-      - openhands_state:/.openhands-state             # conversations/sessions
-    environment:
-      # Through the auth-service proxy (free catalog + fallback); revert to
-      # ${PROVIDER_BASE_URL} to hit OpenRouter directly.
-      LLM_BASE_URL: http://harnesses-auth:8080/v1
-      LLM_MODEL: openai/${MODEL_NAME}
-      LLM_API_KEY: ${PROVIDER_API_KEY}
-      SANDBOX_RUNTIME_CONTAINER_IMAGE: ghcr.io/all-hands-ai/runtime:0.20-nikolaik
-      WORKSPACE_MOUNT_PATH: ${PWD}/project
-
-  harness-kilocode:
-    <<: *harness-defaults
-    build: ./harnesses/kilocode
-    image: harness-kilocode:latest
-    container_name: harness-kilocode
-    # code-server keeps all user data (incl. Kilo Code chat history under
-    # data/User/globalStorage) in /config — persist it across rebuilds.
-    volumes:
-      - ./project:/workspace
-      - ./data:/workspace/data
-      - kilocode_config:/config
-    environment:
-      MODEL_NAME: ${MODEL_NAME}
-      PUID: "1000"
-      PGID: "1000"
-      TZ: UTC
-
   harness-codex:
     <<: *harness-defaults
     build: ./harnesses/codex
@@ -385,7 +348,5 @@ volumes:
   gptme_state:
   opencode_state:
   opencode_hist:
-  kilocode_config:
-  openhands_state:
   aider_state:
   crush_state:

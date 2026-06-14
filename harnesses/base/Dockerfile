@@ -31,5 +31,5 @@ COPY ttyd-kbfix.html /opt/ttyd-kbfix.html
 COPY ttyd-wrapper.sh /usr/local/bin/ttyd
 RUN chmod +x /usr/local/bin/ttyd
 
-# ttyd default port. OpenHands/Kilo override (different process).
+# ttyd default port (every harness serves its terminal here).
 EXPOSE 7681
