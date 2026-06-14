@@ -640,6 +640,12 @@ FREE_MODELS_REFRESH_MIN = int(os.environ.get("FREE_MODELS_REFRESH_MIN", "60"))
 FREE_MODELS_LIMIT = int(os.environ.get("FREE_MODELS_LIMIT", "3"))  # cap on fallback array length
 # OpenRouter rejects a `models` array longer than 3 items
 # ("'models' array must have 3 items or fewer"), so keep this <= 3.
+# By default the catalog keeps only tool-calling models, since agentic harnesses
+# need tools.  Set FREE_REQUIRE_TOOLS=0 to surface *every* free model in the
+# pickers (e.g. to drive a chat-only model by hand) — those models simply can't
+# call tools.  Pair it with FREE_FALLBACK=0 so a hand-picked model is used
+# verbatim instead of being silently rolled over to another free model.
+FREE_REQUIRE_TOOLS = os.environ.get("FREE_REQUIRE_TOOLS", "1") not in ("0", "false", "False", "")
 
 # Claude Code's gateway model discovery only adds models whose id begins with
 # "claude"/"anthropic" to the /model picker, so /anthropic/v1/models exposes free
@@ -687,9 +693,10 @@ async def _refresh_free_models() -> None:
         mid = m.get("id")
         if not mid or not _is_free(m.get("pricing", {})):
             continue
-        # Tool-calling is mandatory — the harnesses are useless without it
-        # (see the proxy note below about OpenRouter's tool routing).
-        if "tools" not in (m.get("supported_parameters") or []):
+        # Tool-calling models are required for agentic work, so by default we keep
+        # only those (see the proxy note below about OpenRouter's tool routing).
+        # FREE_REQUIRE_TOOLS=0 lists every free model instead.
+        if FREE_REQUIRE_TOOLS and "tools" not in (m.get("supported_parameters") or []):
             continue
         ids.append(mid)
         catalog.append({
