@@ -414,13 +414,56 @@ def _set_pin(request: Request, pinned: bool) -> Response:
     )
 
 
-async def _idle_sweep() -> None:
-    """Stop containers that have been quiet for IDLE_TIMEOUT_MIN minutes.
+def _harness_type_of(name: str) -> str | None:
+    """Map a container name (harness-claude / harness-claude-blog) to its harness
+    type, or None when the name isn't a managed harness container."""
+    if not name.startswith(CONTAINER_PREFIX):
+        return None
+    head = name[len(CONTAINER_PREFIX):].split("-", 1)[0]
+    return head if head in HARNESSES else None
 
-    Keys are container names (e.g. `harness-claude-blog`), not harness names —
-    both base and per-instance containers are tracked uniformly.  Stopping
-    frees RAM but does NOT touch the workspace volume; the next visit will
-    just restart the container with its files intact.
+
+def _terminal_busy(container, port: int) -> bool:
+    """True when a client holds an ESTABLISHED TCP connection to the harness's
+    serving port (ttyd, or the web UI for OpenHands/Kilo).
+
+    Caddy proxies the browser terminal's websocket straight to
+    harness-<type>:<port>, and a websocket only triggers /verify once at connect
+    — so a long-lived session looks 'idle' to a timestamp-only tracker and would
+    be killed mid-use.  Reading /proc/net/tcp{,6} (always present in a Linux
+    container, no extra tooling needed) is the reliable 'visitor present' signal.
+    On any error we report not-busy and let the /verify timestamp decide.
+    """
+    hexport = "%04X" % port
+    try:
+        res = container.exec_run(
+            ["sh", "-c", "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null"])
+        out = (res.output or b"").decode("latin-1", "replace")
+    except Exception as e:
+        log.debug("connection check failed for %s: %s", container.name, e)
+        return False
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        local, state = parts[1], parts[3]
+        # state 01 = TCP_ESTABLISHED; `local` is HEXIP:HEXPORT.
+        if state == "01" and local.upper().endswith(":" + hexport):
+            return True
+    return False
+
+
+async def _idle_sweep() -> None:
+    """Stop harness containers with no connected client for IDLE_TIMEOUT_MIN.
+
+    Reconciles against the *actually-running* harness containers each pass rather
+    than only the in-memory last_seen map.  That is the bug fix: containers
+    started by docker-compose, or still up from before the last auth-service
+    restart (which wipes last_seen), were never in the map and so never stopped.
+    Now every running harness is tracked; a container is stopped only once it has
+    had no client connection for the full timeout.  Stopping frees RAM but keeps
+    the workspace volume — the next visit restarts it (files, not the tmux
+    session, intact) via _ensure_running.
     """
     if IDLE_TIMEOUT_MIN <= 0:
         log.info("idle sweep disabled (IDLE_TIMEOUT_MIN=0)")
@@ -429,20 +472,38 @@ async def _idle_sweep() -> None:
     while True:
         await asyncio.sleep(60)
         now = time.monotonic()
-        for name, ts in list(last_seen.items()):
-            if now - ts < timeout_s:
+        try:
+            running = docker_client.containers.list(
+                filters={"name": CONTAINER_PREFIX, "status": "running"})
+        except docker.errors.APIError as e:
+            log.warning("idle sweep: container list failed: %s", e)
+            continue
+        alive: set[str] = set()
+        for container in running:
+            name = container.name
+            htype = _harness_type_of(name)
+            if htype is None:
+                continue  # not a managed harness container
+            alive.add(name)
+            if _terminal_busy(container, _harness_port(htype)):
+                last_seen[name] = now  # active visitor → keep alive
+                if name in instances:
+                    instances[name]["last_seen_ts"] = time.time()
                 continue
-            try:
-                container = docker_client.containers.get(name)
-            except NotFound:
-                last_seen.pop(name, None)
+            ts = last_seen.get(name)
+            if ts is None:
+                last_seen[name] = now  # first sighting → start its idle clock
                 continue
-            if container.status == "running":
-                log.info("stopping %s after %ds idle", name, int(now - ts))
+            if now - ts >= timeout_s:
+                log.info("stopping %s after %ds with no connected client",
+                         name, int(now - ts))
                 try:
                     container.stop(timeout=5)
                 except Exception as e:
                     log.warning("failed to stop %s: %s", name, e)
+                last_seen.pop(name, None)
+        # Forget bookkeeping for containers that are no longer running.
+        for name in [n for n in last_seen if n not in alive]:
             last_seen.pop(name, None)
 
 
