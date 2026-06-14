@@ -21,24 +21,21 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 set -a; source .env; set +a
 
-# port + process pattern per harness.  Web apps (openhands, kilocode) leave
-# PROC empty — only the port check is meaningful there.
+# port + process pattern per harness.
 declare -A PORT=(
   [claude]=7681 [aider]=7681 [opencode]=7681 [crush]=7681 [gptme]=7681
   [goose]=7681 [plandex]=7681 [qwencode]=7681 [codex]=7681 [pi]=7681 [droid]=7681
-  [openhands]=3000 [kilocode]=8080
 )
 declare -A PROC=(
   [claude]=claude    [aider]=aider          [opencode]=opencode
   [crush]=crush           [gptme]=gptme          [goose]=goose
   [plandex]=plandex       [qwencode]="qwen"      [codex]=codex
   [pi]="pi"               [droid]=droid
-  [openhands]=""          [kilocode]=""
 )
 # pi ships a stub on the image; skip the process check for it explicitly.
 SKIP_PROC_CHECK="pi"
 
-ALL=( claude aider opencode crush gptme goose plandex qwencode openhands kilocode codex pi droid )
+ALL=( claude aider opencode crush gptme goose plandex qwencode codex pi droid )
 TARGETS=( "$@" ); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=( "${ALL[@]}" )
 
 # Make sure always-on services are running (compose --profile commands have

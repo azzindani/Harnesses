@@ -44,8 +44,8 @@ MAX_INSTANCES_PER_HARNESS = int(os.environ.get("MAX_INSTANCES_PER_HARNESS", "5")
 BASE_DOMAIN = os.environ.get("HARNESS_BASE_DOMAIN", "lab.casava.space")
 COOKIE_NAME = "harness_session"
 CONTAINER_PREFIX = "harness-"
-HARNESS_PORT = 7681  # ttyd default; OpenHands/Kilo override below
-HARNESS_PORT_OVERRIDES = {"openhands": 3000, "kilocode": 8080}
+HARNESS_PORT = 7681  # ttyd default for every harness
+HARNESS_PORT_OVERRIDES: dict[str, int] = {}  # all harnesses serve ttyd on HARNESS_PORT
 COLD_START_TIMEOUT_S = 30
 TOKEN_TTL_DAYS = 30
 
@@ -53,12 +53,10 @@ TOKEN_TTL_DAYS = 30
 # tokens at startup (avoids running the script as a separate step).
 HARNESSES = [
     "claude", "aider", "opencode", "crush", "gptme", "goose", "plandex",
-    "qwencode", "openhands", "kilocode", "codex", "pi", "droid",
+    "qwencode", "codex", "pi", "droid",
 ]
-# OpenHands has its own web UI on :3000 with a stateful WORKSPACE_MOUNT_PATH;
-# Kilo Code is code-server on :8080 — neither maps cleanly to a plain ttyd
-# clone with a fresh workspace volume, so they stay single-instance.
-MULTI_INSTANCE_HARNESSES = {h for h in HARNESSES if h not in ("openhands", "kilocode")}
+# Every harness is a ttyd clone, so all support on-demand per-slug instances.
+MULTI_INSTANCE_HARNESSES = set(HARNESSES)
 INSTANCE_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$")
 ENV_FILE = "/app/.env"  # bind-mounted from host docker-compose.yml
 INSTANCES_FILE = "/data/instances.json"  # persisted across auth-service restarts
@@ -425,7 +423,7 @@ def _harness_type_of(name: str) -> str | None:
 
 def _terminal_busy(container, port: int) -> bool:
     """True when a client holds an ESTABLISHED TCP connection to the harness's
-    serving port (ttyd, or the web UI for OpenHands/Kilo).
+    serving port (ttyd).
 
     Caddy proxies the browser terminal's websocket straight to
     harness-<type>:<port>, and a websocket only triggers /verify once at connect
@@ -511,7 +509,7 @@ async def _retention_sweep() -> None:
     """Delete per-instance containers + volumes after RETENTION_DAYS of inactivity.
 
     Only affects tracked instances (the ones the auth-service created).  The
-    base 13 harnesses are owned by docker-compose and never touched.  Pinned
+    base 11 harnesses are owned by docker-compose and never touched.  Pinned
     instances are also exempt — operator opts them in via /pin.
     """
     if RETENTION_DAYS <= 0:

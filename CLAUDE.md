@@ -41,8 +41,6 @@ Browser
         ├── goose.lab.domain.com         → harness-goose
         ├── plandex.lab.domain.com       → harness-plandex
         ├── qwencode.lab.domain.com      → harness-qwencode
-        ├── openhands.lab.domain.com     → harness-openhands  (web UI, port 3000)
-        ├── kilocode.lab.domain.com      → harness-kilocode
         ├── codex.lab.domain.com         → harness-codex
         ├── pi.lab.domain.com            → harness-pi
         └── droid.lab.domain.com         → harness-droid
@@ -80,8 +78,6 @@ NIM exposes two compatible API protocols. Each harness uses one:
 | **Goose** | env vars | `OPENAI_API_KEY`, `OPENAI_HOST` |
 | **Plandex** | JSON config | custom provider block with `base_url` |
 | **Qwen Code** | `settings.json` | `modelProviders`, `openai`-type provider |
-| **OpenHands** | Docker env vars | `LLM_BASE_URL`, `LLM_MODEL=openai/<model>`, `LLM_API_KEY=none` |
-| **Kilo Code** | UI / config | "OpenAI Compatible" provider, base URL field |
 | **Codex CLI** | env vars | `OPENAI_BASE_URL`, `OPENAI_API_KEY` |
 | **Pi** | `~/.pi/agent/models.json` | custom provider block with `base_url` |
 
@@ -115,8 +111,6 @@ TOKEN_GPTME=eyJhbGci...
 TOKEN_GOOSE=eyJhbGci...
 TOKEN_PLANDEX=eyJhbGci...
 TOKEN_QWENCODE=eyJhbGci...
-TOKEN_OPENHANDS=eyJhbGci...
-TOKEN_KILOCODE=eyJhbGci...
 TOKEN_CODEX=eyJhbGci...
 TOKEN_PI=eyJhbGci...
 TOKEN_DROID=eyJhbGci...
@@ -162,7 +156,7 @@ Containers are **not always running**. Sablier manages their lifecycle:
 ### Idle RAM profile
 
 ```
-All 13 harnesses stopped:
+All 11 harnesses stopped:
   Caddy + Sablier + Auth     ~100 MB
   Docker daemon               ~50 MB
   ─────────────────────────────────
@@ -319,8 +313,6 @@ project/
 │   ├── goose/Dockerfile
 │   ├── plandex/Dockerfile
 │   ├── qwencode/Dockerfile
-│   ├── openhands/Dockerfile
-│   ├── kilocode/Dockerfile
 │   ├── codex/Dockerfile
 │   ├── pi/Dockerfile
 │   └── droid/Dockerfile
@@ -385,4 +377,3 @@ MCP server runs as a sidecar container on the same Docker Compose network, acces
 - [gptme: Custom Providers](https://gptme.org/docs/custom-providers.html)
 - [Crush: Custom Provider Config](https://github.com/charmbracelet/crush/blob/main/README.md)
 - [OpenCode: Custom Provider Setup](https://haimaker.ai/blog/opencode-custom-provider-setup/)
-- [OpenHands: Local LLMs](https://docs.openhands.dev/openhands/usage/llms/local-llms)

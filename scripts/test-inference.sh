@@ -32,13 +32,11 @@ declare -A CMD=(
   [goose]='goose run -t "$PROMPT"'
   [plandex]='PLANDEX'                                   # multi-step: plandex new + tell --bg + poll convo
   [qwencode]='qwen -m $MODEL_NAME "$PROMPT"'
-  [openhands]='WEB:3000'                                # web UI — verify HTTP response
-  [kilocode]='WEB:8080'                                 # code-server — verify HTTP response
   [codex]='codex exec "$PROMPT"'
   [pi]='pi "$PROMPT"'
   [droid]='droid exec -m "$MODEL_NAME" "$PROMPT"'        # BYOK custom model via ~/.factory/settings.json
 )
-ALL=( claude aider opencode crush gptme goose plandex qwencode openhands kilocode codex pi droid )
+ALL=( claude aider opencode crush gptme goose plandex qwencode codex pi droid )
 TARGETS=( "$@" ); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=( "${ALL[@]}" )
 
 # Guarantee always-on services are up before testing.  `docker compose up`

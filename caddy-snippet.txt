@@ -13,8 +13,8 @@
 #            DNS provider.  Without this, `claude-foo.lab.casava.space` won't
 #            resolve no matter what Caddy does.
 #   2. Caddy on-demand TLS: HTTP-01 + wildcard hostnames can be tricky.  Test
-#            after enabling that openhands.lab + kilocode.lab still serve
-#            their existing certs from /data/caddy without re-issuance.
+#            after enabling that the existing harness subdomains still serve
+#            their certs from /data/caddy without re-issuance.
 #
 # Auth flow per visit (current single-instance layout):
 #   1. Visitor opens  https://<harness>.lab.casava.space/?token=<JWT_SECRET-or-jwt>
@@ -130,26 +130,6 @@ qwencode.lab.casava.space {
     reverse_proxy harness-qwencode:7681 {
         flush_interval -1
         header_up Host {host}
-    }
-}
-
-# OpenHands serves its own web UI on :3000 (no ttyd).
-openhands.lab.casava.space {
-    import harness_auth openhands
-    reverse_proxy harness-openhands:3000 {
-        flush_interval -1
-        header_up Host {host}
-        header_up X-Forwarded-Proto {scheme}
-    }
-}
-
-# Kilo Code = code-server with the extension preinstalled (:8080).
-kilocode.lab.casava.space {
-    import harness_auth kilocode
-    reverse_proxy harness-kilocode:8080 {
-        flush_interval -1
-        header_up Host {host}
-        header_up X-Forwarded-Proto {scheme}
     }
 }
 
