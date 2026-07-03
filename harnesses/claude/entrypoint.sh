@@ -130,9 +130,10 @@ tmux send-keys -t main "claude --dangerously-skip-permissions" Enter
   done
 ) &
 
-# Light xterm.js theme (Solarized Light) so the terminal's own background is
-# actually white/cream "notepad" paper — Claude Code relies on this rather
-# than painting a background itself (see .theme = "light" above).
-LIGHT_THEME='theme={"background":"#fdf6e3","foreground":"#657b83","cursor":"#657b83","cursorAccent":"#fdf6e3","selectionBackground":"#eee8d5","black":"#073642","red":"#dc322f","green":"#859900","yellow":"#b58900","blue":"#268bd2","magenta":"#d33682","cyan":"#2aa198","white":"#eee8d5","brightBlack":"#002b36","brightRed":"#cb4b16","brightGreen":"#586e75","brightYellow":"#657b83","brightBlue":"#839496","brightMagenta":"#6c71c4","brightCyan":"#93a1a1","brightWhite":"#fdf6e3"}'
+# Light xterm.js theme (true white "notepad" paper) so the terminal's own
+# background is actually white — Claude Code relies on this rather than
+# painting a background itself (see .theme = "light" above). Yellow is
+# darkened from pure #ffff00 since that's unreadable on a white background.
+LIGHT_THEME='theme={"background":"#ffffff","foreground":"#24292e","cursor":"#24292e","cursorAccent":"#ffffff","selectionBackground":"#c8e1ff","black":"#24292e","red":"#d73a49","green":"#22863a","yellow":"#b08800","blue":"#005cc5","magenta":"#5a32a3","cyan":"#032f62","white":"#6a737d","brightBlack":"#6a737d","brightRed":"#cb2431","brightGreen":"#22863a","brightYellow":"#b08800","brightBlue":"#005cc5","brightMagenta":"#5a32a3","brightCyan":"#3192aa","brightWhite":"#ffffff"}'
 
 exec ttyd --port 7681 --writable -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' -t "$LIGHT_THEME" tmux attach-session -t main
