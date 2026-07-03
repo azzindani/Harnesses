@@ -89,6 +89,21 @@ else
     rm -f "$_tmp"
 fi
 
+# Light "notepad" theme: Claude Code's own "light" theme only retunes its
+# foreground palette for readability on a light background — it never paints
+# the background itself, so the actual bg color has to come from the ttyd/
+# xterm.js theme below. settings.json lives on the persistent claude_state
+# volume, so this is set idempotently rather than only on first boot.
+SETTINGS="$HOME/.claude/settings.json"
+mkdir -p "$HOME/.claude"
+[ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+_tmp=$(mktemp)
+if jq '.theme = "light"' "$SETTINGS" > "$_tmp" 2>/dev/null; then
+    mv "$_tmp" "$SETTINGS"
+else
+    rm -f "$_tmp"
+fi
+
 # Run with permissions bypassed.  Claude Code refuses --dangerously-skip-
 # permissions under root, but IS_SANDBOX=1 marks this container as a sandbox and
 # re-enables it (the lab containers are disposable and network-isolated).
@@ -115,4 +130,9 @@ tmux send-keys -t main "claude --dangerously-skip-permissions" Enter
   done
 ) &
 
-exec ttyd --port 7681 --writable -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main
+# Light xterm.js theme (Solarized Light) so the terminal's own background is
+# actually white/cream "notepad" paper — Claude Code relies on this rather
+# than painting a background itself (see .theme = "light" above).
+LIGHT_THEME='theme={"background":"#fdf6e3","foreground":"#657b83","cursor":"#657b83","cursorAccent":"#fdf6e3","selectionBackground":"#eee8d5","black":"#073642","red":"#dc322f","green":"#859900","yellow":"#b58900","blue":"#268bd2","magenta":"#d33682","cyan":"#2aa198","white":"#eee8d5","brightBlack":"#002b36","brightRed":"#cb4b16","brightGreen":"#586e75","brightYellow":"#657b83","brightBlue":"#839496","brightMagenta":"#6c71c4","brightCyan":"#93a1a1","brightWhite":"#fdf6e3"}'
+
+exec ttyd --port 7681 --writable -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' -t "$LIGHT_THEME" tmux attach-session -t main
