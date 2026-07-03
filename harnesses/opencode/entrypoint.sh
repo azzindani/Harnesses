@@ -57,31 +57,92 @@ with open("/root/.config/opencode/config.json", "w") as f:
     json.dump(config, f, indent=2)
 PY
 
-# Light theme: "system" is opencode's adaptive theme (it's meant to pick a
-# light/dark variant based on the detected terminal background instead of a
-# fixed palette). NOTE: as of opencode 1.17.13 its TUI (opentui) paints its
-# own background using fixed dark 256-color cells no matter which theme is
-# selected here -- verified by testing "github", "flexoki", and "system"
-# directly, all render dark. This is a known upstream regression from the
-# opentui rewrite (see sst/opencode#3680), not something fixable from harness
-# config alone. Set to the semantically-correct value so this self-heals for
-# free once upstream fixes it -- the ttyd theme below is what actually
-# lightens what's on screen today (prompt/shell chrome around the TUI).
+# Light theme. Built-in themes (including the adaptive "system" theme) define
+# colors as {"dark": "...", "light": "..."} pairs and pick a variant based on
+# detected terminal background -- that detection doesn't work in this ttyd/
+# tmux setup, so every built-in theme rendered dark regardless of name
+# (verified by testing "github", "flexoki", and "system" directly). A custom
+# theme where every color is a plain hex string bypasses that detection
+# entirely (per opencode's theme docs, a plain string is used as-is, no
+# dark/light selection), so it forces a real light theme instead of hoping
+# detection works. Palette matches the ttyd terminal theme below.
+# Color keys must live under a "theme" object (verified against opencode's
+# own built-in themes, e.g. packages/tui/src/theme/assets/github.json in the
+# opencode repo) -- a flat top-level object is silently ignored (fails schema
+# validation with no error, falls back to the default dark theme), which is
+# why an earlier version of this file didn't actually work.
+mkdir -p /root/.config/opencode/themes
+cat > /root/.config/opencode/themes/notepad.json <<'EOF'
+{
+  "$schema": "https://opencode.ai/theme.json",
+  "theme": {
+    "primary": "#0969da",
+    "secondary": "#8250df",
+    "accent": "#bc4c00",
+    "text": "#24292e",
+    "textMuted": "#6a737d",
+    "background": "#ffffff",
+    "backgroundPanel": "#f6f8fa",
+    "backgroundElement": "#eaeef2",
+    "border": "#d0d7de",
+    "borderActive": "#0969da",
+    "borderSubtle": "#eaeef2",
+    "error": "#cf222e",
+    "warning": "#9a6700",
+    "success": "#1a7f37",
+    "info": "#0969da",
+    "diffAdded": "#1a7f37",
+    "diffRemoved": "#cf222e",
+    "diffContext": "#6e7781",
+    "diffHunkHeader": "#8250df",
+    "diffHighlightAdded": "#2da44e",
+    "diffHighlightRemoved": "#ff8182",
+    "diffAddedBg": "#ccffd8",
+    "diffRemovedBg": "#ffebe9",
+    "diffContextBg": "#ffffff",
+    "diffLineNumber": "#8c959f",
+    "diffAddedLineNumberBg": "#b4f1c0",
+    "diffRemovedLineNumberBg": "#ffd6d3",
+    "markdownText": "#24292e",
+    "markdownHeading": "#0969da",
+    "markdownLink": "#0969da",
+    "markdownLinkText": "#0969da",
+    "markdownCode": "#8250df",
+    "markdownBlockQuote": "#6a737d",
+    "markdownEmph": "#24292e",
+    "markdownStrong": "#24292e",
+    "markdownHorizontalRule": "#d0d7de",
+    "markdownListItem": "#24292e",
+    "markdownListEnumeration": "#6a737d",
+    "markdownImage": "#0969da",
+    "markdownImageText": "#6a737d",
+    "markdownCodeBlock": "#f6f8fa",
+    "syntaxComment": "#6a737d",
+    "syntaxKeyword": "#cf222e",
+    "syntaxFunction": "#8250df",
+    "syntaxVariable": "#24292e",
+    "syntaxString": "#0a3069",
+    "syntaxNumber": "#0550ae",
+    "syntaxType": "#953800",
+    "syntaxOperator": "#24292e",
+    "syntaxPunctuation": "#24292e"
+  }
+}
+EOF
+
 cat > /root/.config/opencode/tui.json <<'EOF'
 {
   "$schema": "https://opencode.ai/tui.json",
-  "theme": "system"
+  "theme": "notepad"
 }
 EOF
 
 tmux new-session -d -s main -c /workspace
 tmux send-keys -t main "opencode" Enter
 
-# Light xterm.js theme (true white "notepad" paper) -- see note above re:
-# opencode's own TUI canvas not yet honoring this; kept for chrome
-# consistency with the other harnesses and so a future opencode fix picks
-# it up automatically. Yellow is darkened from pure #ffff00 since that's
-# unreadable on a white background.
+# Light xterm.js theme (true white "notepad" paper), matching the notepad
+# theme above -- covers the shell prompt/chrome around the opencode TUI.
+# Yellow is darkened from pure #ffff00 since that's unreadable on white.
 LIGHT_THEME='theme={"background":"#ffffff","foreground":"#24292e","cursor":"#24292e","cursorAccent":"#ffffff","selectionBackground":"#c8e1ff","black":"#24292e","red":"#d73a49","green":"#22863a","yellow":"#b08800","blue":"#005cc5","magenta":"#5a32a3","cyan":"#032f62","white":"#6a737d","brightBlack":"#6a737d","brightRed":"#cb2431","brightGreen":"#22863a","brightYellow":"#b08800","brightBlue":"#005cc5","brightMagenta":"#5a32a3","brightCyan":"#3192aa","brightWhite":"#ffffff"}'
 
 exec ttyd --port 7681 --writable --check-origin=false -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' -t "$LIGHT_THEME" tmux attach-session -t main
