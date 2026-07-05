@@ -94,6 +94,32 @@ def _launch_cmd(harness_type: str) -> str:
     return template.format(model=os.environ.get("MODEL_NAME", ""))
 
 
+# The exact `-t theme={...}` VALUE each harness's own entrypoint.sh passes to
+# its base ttyd (see harnesses/claude/entrypoint.sh, harnesses/opencode/
+# entrypoint.sh) -- replicated here so a dynamic session's terminal chrome
+# matches its base session's instead of silently falling back to ttyd's plain
+# default. Only claude/opencode have a light "notepad" theme right now; every
+# other harness intentionally has none. Keep this in sync with those
+# entrypoint.sh LIGHT_THEME values if either is ever changed.
+_LIGHT_THEME = (
+    'theme={"background":"#ffffff","foreground":"#24292e","cursor":"#24292e",'
+    '"cursorAccent":"#ffffff","selectionBackground":"#c8e1ff","black":"#24292e",'
+    '"red":"#d73a49","green":"#22863a","yellow":"#b08800","blue":"#005cc5",'
+    '"magenta":"#5a32a3","cyan":"#032f62","white":"#6a737d",'
+    '"brightBlack":"#6a737d","brightRed":"#cb2431","brightGreen":"#22863a",'
+    '"brightYellow":"#b08800","brightBlue":"#005cc5","brightMagenta":"#5a32a3",'
+    '"brightCyan":"#3192aa","brightWhite":"#ffffff"}'
+)
+HARNESS_TTYD_THEME = {
+    "claude": _LIGHT_THEME,
+    "opencode": _LIGHT_THEME,
+}
+
+
+def _ttyd_theme(harness_type: str) -> str:
+    return HARNESS_TTYD_THEME.get(harness_type, "")
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("harness-auth")
 
@@ -215,7 +241,8 @@ def _ensure_dynamic_session(container, harness_type: str, instance: str) -> int:
     """
     port = _allocate_port(harness_type, instance)
     launch_cmd = _launch_cmd(harness_type)
-    result = container.exec_run(["/opt/new-session.sh", instance, str(port), launch_cmd])
+    theme = _ttyd_theme(harness_type)
+    result = container.exec_run(["/opt/new-session.sh", instance, str(port), launch_cmd, theme])
     if result.exit_code != 0:
         raise HTTPException(
             502,
