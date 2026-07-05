@@ -3,6 +3,8 @@ project/**
 !project/.gitkeep
 data/**
 !data/.gitkeep
+history/**
+!history/.gitkeep
 *.pyc
 __pycache__/
 .venv/

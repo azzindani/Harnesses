@@ -117,7 +117,7 @@ services:
       POSTGRES_USER: plandex
       POSTGRES_DB: plandex
     volumes:
-      - plandex_db:/var/lib/postgresql/data
+      - ./history/plandex/db:/var/lib/postgresql/data
     networks:
       - harnesses_net
     healthcheck:
@@ -142,7 +142,7 @@ services:
       # routed through OpenRouter can authenticate.
       OPENROUTER_API_KEY: ${PROVIDER_API_KEY}
     volumes:
-      - plandex_files:/plandex-server
+      - ./history/plandex/files:/plandex-server
     networks:
       - harnesses_net
     depends_on:
@@ -161,7 +161,7 @@ services:
     volumes:
       - ./project:/workspace
       - ./data:/workspace/data
-      - claude_state:/root/.claude
+      - ./history/claude:/root/.claude
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
       - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
@@ -175,7 +175,7 @@ services:
     volumes:
       - ./project:/workspace
       - ./data:/workspace/data
-      - aider_state:/root/.aider                       # chat/input/llm history
+      - ./history/aider:/root/.aider                   # chat/input/llm history
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
       - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
@@ -190,8 +190,8 @@ services:
     volumes:
       - ./project:/workspace
       - ./data:/workspace/data
-      - opencode_state:/root/.local/share/opencode   # sessions
-      - opencode_hist:/root/.local/state/opencode     # prompt history
+      - ./history/opencode/state:/root/.local/share/opencode   # sessions
+      - ./history/opencode/hist:/root/.local/state/opencode     # prompt history
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
       - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
@@ -206,7 +206,7 @@ services:
     volumes:
       - ./project:/workspace
       - ./data:/workspace/data
-      - crush_state:/root/.crush-data                  # session DB (--data-dir)
+      - ./history/crush:/root/.crush-data               # session DB (--data-dir)
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
       - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     # Crush auto-activates its built-in OpenAI provider whenever OPENAI_API_KEY
@@ -223,7 +223,7 @@ services:
     volumes:
       - ./project:/workspace
       - ./data:/workspace/data
-      - gptme_state:/root/.local/share/gptme         # conversation logs
+      - ./history/gptme:/root/.local/share/gptme     # conversation logs
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
       - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
@@ -238,7 +238,7 @@ services:
     volumes:
       - ./project:/workspace
       - ./data:/workspace/data
-      - goose_state:/root/.local/share/goose         # sessions
+      - ./history/goose:/root/.local/share/goose     # sessions
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
       - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
@@ -273,7 +273,7 @@ services:
     volumes:
       - ./project:/workspace
       - ./data:/workspace/data
-      - qwencode_state:/root/.qwen                    # chat history + settings
+      - ./history/qwencode:/root/.qwen                # chat history + settings
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
       - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
@@ -288,7 +288,7 @@ services:
     volumes:
       - ./project:/workspace
       - ./data:/workspace/data
-      - codex_state:/root/.codex                      # sessions (config re-seeded each boot)
+      - ./history/codex:/root/.codex                  # sessions (config re-seeded each boot)
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
       - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
@@ -312,7 +312,7 @@ services:
     volumes:
       - ./project:/workspace
       - ./data:/workspace/data
-      - droid_state:/root/.factory                    # sessions (settings/mcp re-seeded each boot)
+      - ./history/droid:/root/.factory                # sessions (settings/mcp re-seeded each boot)
       - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
       - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
@@ -330,23 +330,14 @@ networks:
     driver: bridge
 
 volumes:
-  plandex_db:
-  plandex_files:
   # Persisted auth state — instances.json (per-instance retention metadata).
   # Kept across `docker compose down` so multi-instance bookkeeping survives.
   harnesses_data:
-  # Per-harness session-history state — survives rebuilds/recreates AND workspace
-  # cleanups so chat history is never lost on project updates. Every harness that
-  # stores conversations writes them into its own volume here (aider/crush are
-  # redirected out of /workspace by their entrypoints; plandex keeps plans in
-  # plandex_db; pi is stateless — it does not persist conversations).
-  claude_state:
-  codex_state:
-  qwencode_state:
-  droid_state:
-  goose_state:
-  gptme_state:
-  opencode_state:
-  opencode_hist:
-  aider_state:
-  crush_state:
+  # Per-harness session-history state used to live in one opaque Docker named
+  # volume per harness (claude_state, codex_state, plandex_db, etc). All of it
+  # now lives under ./history/<harness>/ instead (bind mount, see the per-service
+  # volumes: entries above) -- ONE visible, backup-able directory tree on the
+  # host for every harness's conversation history, instead of N volumes hidden
+  # under /var/lib/docker/volumes. Survives rebuilds/recreates AND `docker
+  # compose down` the same way named volumes did; only `rm -rf ./history/<x>`
+  # can lose it now, same as any other file on disk.
