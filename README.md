@@ -54,7 +54,7 @@ Always-on: the shared Caddy router + `harnesses-auth`. Everything else (the 11 h
 |---|---|---|---|
 | **Claude Code** | Anthropic (`/v1/messages`) | env vars | via the auth service's `/anthropic` translating proxy |
 | **Droid** (Factory CLI) | Anthropic-shaped, OpenAI-compat model | `~/.factory/settings.json` | BYOK custom model, non-interactive-friendly |
-| **Aider** | OpenAI (`/v1/chat/completions`) | env vars | own chat/input/llm history volume |
+| **Aider** | OpenAI (`/v1/chat/completions`) | env vars | |
 | **OpenCode** | OpenAI-compat | `config.json` + `tui.json` + custom theme file | see theming notes below |
 | **Crush** | OpenAI-compat | `crush.json` (rendered into `/workspace`) | unsets `OPENAI_*` env so its own provider config wins |
 | **gptme** | OpenAI-compat | `config.toml` | |
@@ -63,6 +63,8 @@ Always-on: the shared Caddy router + `harnesses-auth`. Everything else (the 11 h
 | **Qwen Code** | OpenAI-compat | `settings.json` | auto-updater disabled (breaks the TUI mid-session otherwise) |
 | **Codex CLI** | OpenAI `/responses` API | `config.toml` | bypasses the auth-service proxy — talks straight to the provider, so it doesn't get the free-model fallback the others do |
 | **Pi** | OpenAI-compat | `~/.pi/agent/models.json` | stateless — no persisted conversation history |
+
+> Only Claude Code and OpenCode are actively run day to day; the other 9 harness containers are stopped (not removed from `docker-compose.yml`) to save RAM/storage. Any of them comes back with `docker compose --profile on-demand up -d harness-<name>` — their images rebuild from the committed Dockerfiles and their history (see below) was never deleted.
 
 Every harness that supports MCP registers two optional servers the same way: **Folio** (remote HTTP MCP, bearer auth) and **web search/fetch** (a bundled DuckDuckGo sidecar, no key needed).
 
@@ -112,6 +114,15 @@ Visiting `https://<harness>-<slug>.lab.example.com/?token=<jwt>` (any existing t
 - Each slug's session and port are stable across reconnects; visiting the same slug again reattaches to the same tmux window.
 - `/pin` and `/unpin` (e.g. `https://claude-blog.lab.example.com/pin`) exempt a session from the `RETENTION_DAYS` auto-cleanup sweep.
 - Because every session of one harness type shares that one container, idle-stop is all-or-nothing: the container only stops once *every* session on it (base and every slug) has had no connected client for `IDLE_TIMEOUT_MIN`. A dynamic session's tmux window doesn't survive a container stop — it's recreated fresh the next time that slug is visited (the CLI's own conversation history, where a harness persists one, is unaffected — only the terminal window itself is momentarily gone).
+
+## Session history & storage
+
+Every harness that persists conversations writes into `./history/<harness>/` — one bind-mounted directory tree on the host, not a separate opaque Docker volume per harness. `docker-compose.yml` mounts the relevant subdirectory into each container at the path that harness expects (e.g. `./history/claude:/root/.claude`, `./history/codex:/root/.codex`, `./history/plandex/db:/var/lib/postgresql/data`). Practical implications:
+
+- **One place to back up:** `tar czf backup.tar.gz history/` captures every harness's entire conversation history in one shot.
+- **Survives everything except deleting it:** container recreate, image rebuild, `docker compose down`, even `docker volume prune` — none of these touch it, because it's a plain host directory, not a Docker-managed volume. Only `rm -rf history/<harness>` (or the whole tree) destroys it, same as any other file on disk.
+- **Config is not history:** each harness's config files (provider settings, MCP registration, etc.) are re-seeded by `entrypoint.sh` on every boot and are *not* in `./history/` — only conversation/session data (transcripts, chat DBs, prompt history) lives there. Pi has nothing here since it's stateless (no persisted conversations to begin with).
+- **Never treat these directories as scratch.** `history/claude`, `history/aider`, `history/crush`, etc. hold real conversation history, not disposable build output — do not `rm -rf` them during a "clean unused files" pass.
 
 ## Terminal theming
 
@@ -195,7 +206,12 @@ docker compose up -d --force-recreate harness-<name>
 │       └── entrypoint.sh      # writes that CLI's config, launches tmux + ttyd
 ├── web-mcp/                   # bundled DuckDuckGo search/fetch MCP sidecar
 ├── project/                   # shared codebase, mounted at /workspace in every harness
-└── data/                      # shared datasets, mounted at /workspace/data
+├── data/                      # shared datasets, mounted at /workspace/data
+└── history/                   # every harness's session history, one bind-mounted tree (see above)
+    ├── claude/
+    ├── opencode/{state,hist}/
+    ├── plandex/{db,files}/
+    └── <name>/...
 ```
 
 The reverse proxy in front of all of this (TLS, on-demand certificate issuance, per-hostname routing) is a shared Caddy instance that lives **outside** this repo, since it also fronts other, unrelated projects on the same host. This repo only owns everything behind it.
