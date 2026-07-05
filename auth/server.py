@@ -38,14 +38,17 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
 IDLE_TIMEOUT_MIN = int(os.environ.get("IDLE_TIMEOUT_MIN", "30"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "7"))
-# Cap on concurrently-existing dynamic instances per harness type (the base
-# harness-<type> container is not counted).  0 disables the cap.
+# Cap on concurrent dynamic SESSIONS per harness type. All sessions of one
+# harness type share the single base harness-<type> container (see
+# project_harness_multi_instance memory for why: a separate container per
+# session was tried first and reverted as wasteful) -- this caps how many
+# extra ports/tmux windows that one container can be asked to run at once.
+# 0 disables the cap.
 MAX_INSTANCES_PER_HARNESS = int(os.environ.get("MAX_INSTANCES_PER_HARNESS", "5"))
 BASE_DOMAIN = os.environ.get("HARNESS_BASE_DOMAIN", "lab.casava.space")
 COOKIE_NAME = "harness_session"
 CONTAINER_PREFIX = "harness-"
-HARNESS_PORT = 7681  # ttyd default for every harness
-HARNESS_PORT_OVERRIDES: dict[str, int] = {}  # all harnesses serve ttyd on HARNESS_PORT
+HARNESS_PORT = 7681  # ttyd default for every harness's base "main" session
 COLD_START_TIMEOUT_S = 30
 TOKEN_TTL_DAYS = 30
 
@@ -55,33 +58,62 @@ HARNESSES = [
     "claude", "aider", "opencode", "crush", "gptme", "goose", "plandex",
     "qwencode", "codex", "pi", "droid",
 ]
-# Every harness is a ttyd clone, so all support on-demand per-slug instances.
+# Every harness is a ttyd clone, so all support on-demand per-slug sessions.
 MULTI_INSTANCE_HARNESSES = set(HARNESSES)
 INSTANCE_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$")
 ENV_FILE = "/app/.env"  # bind-mounted from host docker-compose.yml
 INSTANCES_FILE = "/data/instances.json"  # persisted across auth-service restarts
+
+# Exact launch command each harness's own entrypoint.sh sends to its "main"
+# tmux session (`tmux send-keys -t main "<cmd>" Enter`) -- replicated here so
+# a dynamic session boots the identical CLI. {model} is filled in from this
+# service's own MODEL_NAME env var (same value every harness gets via the
+# compose env anchors). Keep in sync with harnesses/<name>/entrypoint.sh.
+HARNESS_LAUNCH_CMD = {
+    "claude": "claude --dangerously-skip-permissions",
+    "aider": (
+        "aider --model openai/{model} --no-auto-commits "
+        "--chat-history-file /root/.aider/chat.history.md "
+        "--input-history-file /root/.aider/input.history "
+        "--llm-history-file /root/.aider/llm.history"
+    ),
+    "opencode": "opencode",
+    "crush": "crush --data-dir /root/.crush-data",
+    "gptme": "gptme --model lab/{model}",
+    "goose": "goose session",
+    "plandex": "plandex",
+    "qwencode": "qwen -m {model}",
+    "codex": "codex --model {model}",
+    "pi": "pi",
+    "droid": 'droid -m "{model}"',
+}
+
+
+def _launch_cmd(harness_type: str) -> str:
+    template = HARNESS_LAUNCH_CMD.get(harness_type, "")
+    return template.format(model=os.environ.get("MODEL_NAME", ""))
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("harness-auth")
 
 docker_client = docker.from_env()
 
-# Per-container idle tracking (monotonic, used by _idle_sweep for precision).
-# Key is the container name (e.g., "harness-claude-blog"), value is when it
-# was last accessed via /verify.
+# Idle tracking (monotonic, used by _idle_sweep for precision). Key is the
+# container name (e.g., "harness-claude") -- since every session of one
+# harness type shares that one container, this tracks the container as a
+# whole; _idle_sweep only lets it go idle once EVERY session on it (base +
+# every dynamic slug) has been quiet for the timeout.
 last_seen: dict[str, float] = {}
 
-# Per-instance metadata persisted to /data/instances.json so retention survives
-# auth-service restarts.  Only contains *created* instances (not the base 13
-# single-instance harnesses, which are managed by docker-compose).
-# Key is the container name, value is {harness_type, created, last_seen_ts, pinned}.
+# Per-session metadata persisted to /data/instances.json so retention survives
+# auth-service restarts. Only contains *dynamic* sessions (not the 11 base
+# harnesses, which are managed by docker-compose and have no cap/retention).
+# Key is "<harness_type>-<slug>" (see _session_key), value is
+# {harness_type, port, created, last_seen_ts, pinned}.
 instances: dict[str, dict] = {}
 
 app = FastAPI(title="harness-auth", docs_url=None, redoc_url=None)
-
-
-def _harness_port(harness_type: str) -> int:
-    return HARNESS_PORT_OVERRIDES.get(harness_type, HARNESS_PORT)
 
 
 def _parse_subdomain(subdomain: str) -> tuple[str, str | None]:
@@ -103,14 +135,11 @@ def _parse_subdomain(subdomain: str) -> tuple[str, str | None]:
     raise HTTPException(404, f"unknown harness or instance: {subdomain!r}")
 
 
-def _container_for(harness_type: str, instance: str | None) -> str:
-    if instance is None:
-        return CONTAINER_PREFIX + harness_type
-    return CONTAINER_PREFIX + harness_type + "-" + instance
-
-
-def _volume_for(harness_type: str, instance: str) -> str:
-    return f"workspace-{harness_type}-{instance}"
+def _session_key(harness_type: str, instance: str) -> str:
+    """Key into `instances` for a dynamic session -- distinct from a container
+    name now that sessions share their base container instead of getting
+    their own (see project_harness_multi_instance memory)."""
+    return f"{harness_type}-{instance}"
 
 
 def _instances_load() -> None:
@@ -136,101 +165,76 @@ def _instances_save() -> None:
         log.warning("could not save %s: %s", INSTANCES_FILE, e)
 
 
-def _count_instances(harness_type: str) -> int:
-    """Number of existing dynamic instances of a harness type.
+def _assigned_ports(harness_type: str) -> dict[str, int]:
+    """slug -> port for every currently-tracked dynamic session of this type."""
+    prefix = harness_type + "-"
+    return {
+        key[len(prefix):]: meta["port"]
+        for key, meta in instances.items()
+        if key.startswith(prefix) and "port" in meta
+    }
 
-    Counts only auto-created instance containers (tagged with the
-    `harness.type` label by _ensure_instance_container).  The base
-    `harness-<type>` container is created by docker-compose without that
-    label, so it is never counted toward the cap.
+
+def _allocate_port(harness_type: str, instance: str) -> int:
+    """Reuse this slug's already-assigned port, or hand out the next free one
+    in HARNESS_PORT+1 .. HARNESS_PORT+MAX_INSTANCES_PER_HARNESS.
+
+    Reconnecting to an already-assigned slug is never blocked (handled by the
+    reuse check below); only handing out a *new* port is capped.
     """
-    try:
-        return len(docker_client.containers.list(
-            all=True, filters={"label": f"harness.type={harness_type}"}))
-    except docker.errors.APIError as e:
-        log.warning("could not list instances for %s: %s — using tracked count", harness_type, e)
-        return sum(1 for m in instances.values() if m.get("harness_type") == harness_type)
+    key = _session_key(harness_type, instance)
+    existing = instances.get(key, {}).get("port")
+    if existing is not None:
+        return existing
 
-
-def _ensure_instance_container(harness_type: str, instance: str) -> str:
-    """Create a per-instance container from the base image if it doesn't exist.
-
-    Clones env from the base `harness-<type>` container so .env / compose
-    overrides stay the single source of truth — we never have to keep two
-    copies of the harness's environment in sync.  Each instance gets its own
-    named volume mounted at /workspace, isolated from every other instance
-    and from the base.
-    """
-    name = _container_for(harness_type, instance)
-    try:
-        docker_client.containers.get(name)
-        return name
-    except NotFound:
-        pass
-
-    # Cap concurrent dynamic instances per harness type.  Reconnecting to an
-    # already-existing instance is never blocked (handled by the early return
-    # above); only the creation of a *new* distinct slug is gated here.
-    if MAX_INSTANCES_PER_HARNESS > 0:
-        n = _count_instances(harness_type)
-        if n >= MAX_INSTANCES_PER_HARNESS:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    f"instance cap reached for '{harness_type}': "
-                    f"{n}/{MAX_INSTANCES_PER_HARNESS} already running. "
-                    f"Remove an existing {harness_type}-<slug> instance before "
-                    f"creating a new one."
-                ),
-            )
-
-    base_name = CONTAINER_PREFIX + harness_type
-    try:
-        base = docker_client.containers.get(base_name)
-    except NotFound:
-        raise HTTPException(
-            502, f"base container {base_name} not found — `docker compose up -d` it first"
-        )
-
-    image = base.attrs["Config"]["Image"]
-    env = base.attrs["Config"]["Env"]
-    networks = list(base.attrs["NetworkSettings"]["Networks"].keys()) or ["harnesses_net"]
-
-    volume_name = _volume_for(harness_type, instance)
-    try:
-        docker_client.volumes.get(volume_name)
-    except NotFound:
-        docker_client.volumes.create(
-            name=volume_name,
-            labels={"harness.type": harness_type, "harness.instance": instance},
-        )
-
-    log.info("creating instance container %s (image=%s, volume=%s)",
-             name, image, volume_name)
-    container = docker_client.containers.create(
-        image=image,
-        name=name,
-        environment=env,
-        network=networks[0],
-        volumes={volume_name: {"bind": "/workspace", "mode": "rw"}},
-        restart_policy={"Name": "no"},
-        detach=True,
-        labels={"harness.type": harness_type, "harness.instance": instance},
+    used = set(_assigned_ports(harness_type).values())
+    cap = MAX_INSTANCES_PER_HARNESS if MAX_INSTANCES_PER_HARNESS > 0 else 100
+    for offset in range(1, cap + 1):
+        port = HARNESS_PORT + offset
+        if port not in used:
+            return port
+    raise HTTPException(
+        status_code=429,
+        detail=(
+            f"session cap reached for '{harness_type}': "
+            f"{len(used)}/{MAX_INSTANCES_PER_HARNESS} already running. "
+            f"Remove an existing {harness_type}-<slug> session before creating a new one."
+        ),
     )
-    for n in networks[1:]:
-        try:
-            docker_client.networks.get(n).connect(container)
-        except docker.errors.APIError as e:
-            log.warning("could not attach %s to network %s: %s", name, n, e)
 
-    instances[name] = {
+
+def _ensure_dynamic_session(container, harness_type: str, instance: str) -> int:
+    """`container` (the harness's single base container) is already confirmed
+    running. Ensure it has a tmux session + ttyd process for this slug,
+    sharing its one /workspace, and return the port ttyd is listening on.
+
+    Idempotent: safe to call on every /verify hit, including after the
+    container was idle-stopped and restarted (in which case the previously
+    assigned port is reused, but new-session.sh recreates the now-missing
+    tmux session + ttyd process for it).
+    """
+    port = _allocate_port(harness_type, instance)
+    launch_cmd = _launch_cmd(harness_type)
+    result = container.exec_run(["/opt/new-session.sh", instance, str(port), launch_cmd])
+    if result.exit_code != 0:
+        raise HTTPException(
+            502,
+            f"failed to start session {instance!r} in {container.name}: "
+            f"{(result.output or b'').decode(errors='replace')[:300]}",
+        )
+    _wait_for_port(container.name, port)
+
+    key = _session_key(harness_type, instance)
+    prev = instances.get(key, {})
+    instances[key] = {
         "harness_type": harness_type,
-        "created": time.time(),
+        "port": port,
+        "created": prev.get("created", time.time()),
         "last_seen_ts": time.time(),
-        "pinned": False,
+        "pinned": prev.get("pinned", False),
     }
     _instances_save()
-    return name
+    return port
 
 
 def _decode(token: str, subdomain: str, harness_type: str) -> dict:
@@ -255,34 +259,47 @@ def _decode(token: str, subdomain: str, harness_type: str) -> dict:
     return payload
 
 
-def _ensure_running(harness_type: str, instance: str | None) -> str:
-    """Make sure the target container exists (creating instances on demand),
-    is started, and is reachable on its ttyd port.  Returns its name."""
-    if instance is not None:
-        _ensure_instance_container(harness_type, instance)
-    name = _container_for(harness_type, instance)
-    try:
-        container = docker_client.containers.get(name)
-    except NotFound:
-        raise HTTPException(status_code=502, detail=f"container {name} does not exist")
-
-    if container.status != "running":
-        log.info("starting %s (was %s)", name, container.status)
-        container.start()
-
-    port = _harness_port(harness_type)
+def _wait_for_port(container_name: str, port: int) -> None:
     deadline = time.monotonic() + COLD_START_TIMEOUT_S
     while time.monotonic() < deadline:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.5)
             try:
-                s.connect((name, port))
-                return name
+                s.connect((container_name, port))
+                return
             except OSError:
                 time.sleep(0.3)
     raise HTTPException(
-        status_code=504, detail=f"{name} did not come up within {COLD_START_TIMEOUT_S}s"
+        status_code=504,
+        detail=f"{container_name}:{port} did not come up within {COLD_START_TIMEOUT_S}s",
     )
+
+
+def _ensure_running(harness_type: str, instance: str | None) -> tuple[str, int]:
+    """Make sure the harness's one base container is running and reachable.
+
+    Returns (container_name, port) to reverse_proxy to. The container is
+    always the single `harness-<type>` container -- `instance`, when set,
+    just selects which port within it (see _ensure_dynamic_session) rather
+    than a separate container, so every session of one harness type shares
+    that container's resources and its one /workspace.
+    """
+    container_name = CONTAINER_PREFIX + harness_type
+    try:
+        container = docker_client.containers.get(container_name)
+    except NotFound:
+        raise HTTPException(status_code=502, detail=f"container {container_name} does not exist")
+
+    if container.status != "running":
+        log.info("starting %s (was %s)", container_name, container.status)
+        container.start()
+    _wait_for_port(container_name, HARNESS_PORT)
+
+    if instance is None:
+        return container_name, HARNESS_PORT
+
+    port = _ensure_dynamic_session(container, harness_type, instance)
+    return container_name, port
 
 
 @app.get("/healthz")
@@ -330,7 +347,14 @@ def verify(request: Request, harness: str = Query(...)) -> Response:
     """Caddy `forward_auth` target: 200 → allow, anything else → block.
 
     `harness` query param is the full subdomain label (e.g., `claude` or
-    `claude-blog`); we parse it and route to (or create) the right container.
+    `claude-blog`); we parse it, ensure the right container/session is up, and
+    tell Caddy which `container:port` to actually proxy to via the
+    X-Harness-Upstream response header (copied into the request by Caddy's
+    `copy_headers`, then used as the reverse_proxy target -- see the
+    harness_auth snippet in Caddyfile and project_harness_multi_instance
+    memory for why this indirection is needed: multiple sessions of one
+    harness type share a single container on different ports, so Caddy can't
+    derive the target from the hostname alone anymore).
     """
     token = request.cookies.get(COOKIE_NAME)
     if not token:
@@ -341,13 +365,18 @@ def verify(request: Request, harness: str = Query(...)) -> Response:
         )
     harness_type, instance = _parse_subdomain(harness)
     _decode(token, harness, harness_type)
-    container = _ensure_running(harness_type, instance)
+    container_name, port = _ensure_running(harness_type, instance)
 
-    last_seen[container] = time.monotonic()
-    if container in instances:
-        instances[container]["last_seen_ts"] = time.time()
-        _instances_save()
-    return Response(status_code=200)
+    last_seen[container_name] = time.monotonic()
+    if instance is not None:
+        key = _session_key(harness_type, instance)
+        if key in instances:
+            instances[key]["last_seen_ts"] = time.time()
+            _instances_save()
+    return Response(
+        status_code=200,
+        headers={"X-Harness-Upstream": f"{container_name}:{port}"},
+    )
 
 
 @app.get("/ask")
@@ -394,45 +423,51 @@ def _set_pin(request: Request, pinned: bool) -> Response:
     _decode(token, subdomain, harness_type)
     if instance is None:
         return HTMLResponse(
-            f"<h1>n/a</h1><p>{subdomain} is the base harness, not an instance — "
+            f"<h1>n/a</h1><p>{subdomain} is the base harness, not a session — "
             f"nothing to pin.  Visit a slug variant like "
             f"<code>{subdomain}-myproject.{BASE_DOMAIN}</code> first.</p>",
             status_code=400,
         )
-    name = _container_for(harness_type, instance)
-    if name not in instances:
-        raise HTTPException(404, f"instance {name} unknown — visit / first to create it")
-    instances[name]["pinned"] = pinned
+    key = _session_key(harness_type, instance)
+    if key not in instances:
+        raise HTTPException(404, f"session {key} unknown — visit / first to create it")
+    instances[key]["pinned"] = pinned
     _instances_save()
     state = "pinned (kept forever)" if pinned else f"unpinned (retention {RETENTION_DAYS}d)"
     return HTMLResponse(
-        f"<h1>{state}</h1><p>{name}</p>"
+        f"<h1>{state}</h1><p>{key}</p>"
         f'<p><a href="/">back to terminal</a></p>',
         status_code=200,
     )
 
 
 def _harness_type_of(name: str) -> str | None:
-    """Map a container name (harness-claude / harness-claude-blog) to its harness
-    type, or None when the name isn't a managed harness container."""
+    """Map a container name (harness-claude) to its harness type, or None
+    when the name isn't a managed harness container. Every session of one
+    type shares that one container now, so this is just a straight lookup,
+    not a prefix match against a per-instance container name."""
     if not name.startswith(CONTAINER_PREFIX):
         return None
-    head = name[len(CONTAINER_PREFIX):].split("-", 1)[0]
+    head = name[len(CONTAINER_PREFIX):]
     return head if head in HARNESSES else None
 
 
-def _terminal_busy(container, port: int) -> bool:
-    """True when a client holds an ESTABLISHED TCP connection to the harness's
-    serving port (ttyd).
+def _terminal_busy_any(container, ports: list[int]) -> bool:
+    """True when a client holds an ESTABLISHED TCP connection to ANY of the
+    given ports on this container -- the base ttyd (HARNESS_PORT) plus every
+    currently-assigned dynamic-session port, since idle-stopping the shared
+    container has to wait for every session on it to go quiet, not just the
+    base one.
 
     Caddy proxies the browser terminal's websocket straight to
-    harness-<type>:<port>, and a websocket only triggers /verify once at connect
-    — so a long-lived session looks 'idle' to a timestamp-only tracker and would
-    be killed mid-use.  Reading /proc/net/tcp{,6} (always present in a Linux
-    container, no extra tooling needed) is the reliable 'visitor present' signal.
-    On any error we report not-busy and let the /verify timestamp decide.
+    harness-<type>:<port>, and a websocket only triggers /verify once at
+    connect — so a long-lived session looks 'idle' to a timestamp-only
+    tracker and would be killed mid-use.  Reading /proc/net/tcp{,6} (always
+    present in a Linux container, no extra tooling needed) is the reliable
+    'visitor present' signal. On any error we report not-busy and let the
+    /verify timestamp decide.
     """
-    hexport = "%04X" % port
+    hexports = {"%04X" % p for p in ports}
     try:
         res = container.exec_run(
             ["sh", "-c", "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null"])
@@ -446,7 +481,7 @@ def _terminal_busy(container, port: int) -> bool:
             continue
         local, state = parts[1], parts[3]
         # state 01 = TCP_ESTABLISHED; `local` is HEXIP:HEXPORT.
-        if state == "01" and local.upper().endswith(":" + hexport):
+        if state == "01" and local.upper().split(":")[-1] in hexports:
             return True
     return False
 
@@ -459,9 +494,12 @@ async def _idle_sweep() -> None:
     started by docker-compose, or still up from before the last auth-service
     restart (which wipes last_seen), were never in the map and so never stopped.
     Now every running harness is tracked; a container is stopped only once it has
-    had no client connection for the full timeout.  Stopping frees RAM but keeps
-    the workspace volume — the next visit restarts it (files, not the tmux
-    session, intact) via _ensure_running.
+    had no client connection on ANY of its ports (base session + every dynamic
+    slug sharing that container) for the full timeout.  Stopping frees RAM but
+    keeps the workspace volume — the next visit restarts it via _ensure_running.
+    Dynamic sessions on a stopped container don't auto-resume (their tmux
+    windows are gone), but _ensure_dynamic_session recreates them on the next
+    /verify for that slug.
     """
     if IDLE_TIMEOUT_MIN <= 0:
         log.info("idle sweep disabled (IDLE_TIMEOUT_MIN=0)")
@@ -483,10 +521,14 @@ async def _idle_sweep() -> None:
             if htype is None:
                 continue  # not a managed harness container
             alive.add(name)
-            if _terminal_busy(container, _harness_port(htype)):
+            ports = [HARNESS_PORT] + list(_assigned_ports(htype).values())
+            if _terminal_busy_any(container, ports):
                 last_seen[name] = now  # active visitor → keep alive
-                if name in instances:
-                    instances[name]["last_seen_ts"] = time.time()
+                now_wall = time.time()
+                for slug in _assigned_ports(htype):
+                    key = _session_key(htype, slug)
+                    if key in instances:
+                        instances[key]["last_seen_ts"] = now_wall
                 continue
             ts = last_seen.get(name)
             if ts is None:
@@ -506,11 +548,14 @@ async def _idle_sweep() -> None:
 
 
 async def _retention_sweep() -> None:
-    """Delete per-instance containers + volumes after RETENTION_DAYS of inactivity.
+    """Close dynamic sessions (kill their tmux session + ttyd process) after
+    RETENTION_DAYS of inactivity.
 
-    Only affects tracked instances (the ones the auth-service created).  The
-    base 11 harnesses are owned by docker-compose and never touched.  Pinned
-    instances are also exempt — operator opts them in via /pin.
+    Only affects tracked dynamic sessions -- the base 11 harness containers
+    are owned by docker-compose and never touched, and there's no separate
+    container/volume per session to remove anymore (they all share their
+    base container's one /workspace).  Pinned sessions are exempt — operator
+    opts them in via /pin.
     """
     if RETENTION_DAYS <= 0:
         log.info("retention sweep disabled (RETENTION_DAYS=0)")
@@ -520,33 +565,30 @@ async def _retention_sweep() -> None:
     while True:
         await asyncio.sleep(3600)
         now = time.time()
-        for name, meta in list(instances.items()):
+        for key, meta in list(instances.items()):
             if meta.get("pinned"):
                 continue
             last = meta.get("last_seen_ts", 0)
             if now - last < cutoff_s:
                 continue
             age_days = (now - last) / 86400
-            log.info("retention: removing %s (idle %.1fd, exceeds %dd)",
-                     name, age_days, RETENTION_DAYS)
+            harness_type = meta.get("harness_type", "")
+            port = meta.get("port")
+            instance = key[len(harness_type) + 1:] if harness_type and key.startswith(harness_type + "-") else key
+            container_name = CONTAINER_PREFIX + harness_type
+            log.info("retention: closing session %s (idle %.1fd, exceeds %dd)",
+                     key, age_days, RETENTION_DAYS)
             try:
-                docker_client.containers.get(name).remove(force=True)
+                container = docker_client.containers.get(container_name)
+                if container.status == "running":
+                    container.exec_run(["tmux", "kill-session", "-t", instance])
+                    if port is not None:
+                        container.exec_run(["pkill", "-f", f"ttyd --port {port} "])
             except NotFound:
                 pass
             except Exception as e:
-                log.warning("could not remove container %s: %s", name, e)
-            harness_type = meta.get("harness_type", "")
-            short = name[len(CONTAINER_PREFIX):]  # e.g., 'claude-blog'
-            if harness_type and short.startswith(harness_type + "-"):
-                instance = short[len(harness_type) + 1:]
-                try:
-                    docker_client.volumes.get(_volume_for(harness_type, instance)).remove()
-                except NotFound:
-                    pass
-                except Exception as e:
-                    log.warning("could not remove volume for %s: %s", name, e)
-            instances.pop(name, None)
-            last_seen.pop(name, None)
+                log.warning("could not close session %s: %s", key, e)
+            instances.pop(key, None)
         _instances_save()
 
 
@@ -628,20 +670,21 @@ def _autofill_tokens_and_log_urls() -> None:
         log.info("  https://%s.%s/?token=%s", h, BASE_DOMAIN, JWT_SECRET)
     log.info(sep)
     cap = f"max {MAX_INSTANCES_PER_HARNESS}/harness" if MAX_INSTANCES_PER_HARNESS > 0 else "uncapped"
-    log.info("Multi-instance pattern (%s, idle-stop %dmin) — visit any URL of this", cap, IDLE_TIMEOUT_MIN)
-    log.info("shape to spin up a fresh isolated container + workspace volume")
-    log.info("(auto-cleanup after %dd of no activity unless you /pin it):", RETENTION_DAYS)
+    log.info("Multi-session pattern (%s, idle-stop %dmin) — visit any URL of this", cap, IDLE_TIMEOUT_MIN)
+    log.info("shape to open an additional tmux+ttyd session INSIDE the same base")
+    log.info("container, sharing its one /workspace (auto-cleanup after %dd of no", RETENTION_DAYS)
+    log.info("activity unless you /pin it):")
     log.info(sep)
     for h in sorted(MULTI_INSTANCE_HARNESSES):
         log.info("  https://%s-<your-slug>.%s/?token=%s", h, BASE_DOMAIN, JWT_SECRET)
     log.info(sep)
     if instances:
-        log.info("Currently tracked instances (use /pin and /unpin to manage):")
+        log.info("Currently tracked dynamic sessions (use /pin and /unpin to manage):")
         log.info(sep)
-        for name, meta in sorted(instances.items()):
+        for key, meta in sorted(instances.items()):
             idle_days = (time.time() - meta.get("last_seen_ts", time.time())) / 86400
             tag = "PINNED" if meta.get("pinned") else f"idle {idle_days:.1f}d / {RETENTION_DAYS}d"
-            log.info("  %-40s [%s]", name, tag)
+            log.info("  %-40s [port %s] [%s]", key, meta.get("port", "?"), tag)
         log.info(sep)
 
 

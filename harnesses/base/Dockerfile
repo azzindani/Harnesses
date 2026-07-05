@@ -31,5 +31,12 @@ COPY ttyd-kbfix.html /opt/ttyd-kbfix.html
 COPY ttyd-wrapper.sh /usr/local/bin/ttyd
 RUN chmod +x /usr/local/bin/ttyd
 
+# Lets the auth service spawn additional simultaneous tmux+ttyd sessions
+# inside an already-running harness container (same container, same
+# /workspace, different port) instead of a whole new container per session.
+# See auth/server.py _ensure_dynamic_session.
+COPY new-session.sh /opt/new-session.sh
+RUN chmod +x /opt/new-session.sh
+
 # ttyd default port (every harness serves its terminal here).
 EXPOSE 7681
