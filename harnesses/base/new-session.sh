@@ -47,6 +47,7 @@ if ! pgrep -f -- "--port $PORT --writable" >/dev/null 2>&1; then
     if [ -n "$TTYD_THEME" ]; then
         nohup ttyd --port "$PORT" --writable --check-origin=false \
             -t fontSize=18 \
+            -t scrollback=10000 \
             -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' \
             -t "$TTYD_THEME" \
             tmux attach-session -t "$SLUG" \
@@ -54,6 +55,7 @@ if ! pgrep -f -- "--port $PORT --writable" >/dev/null 2>&1; then
     else
         nohup ttyd --port "$PORT" --writable --check-origin=false \
             -t fontSize=18 \
+            -t scrollback=10000 \
             -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' \
             tmux attach-session -t "$SLUG" \
             >>/var/log/ttyd-extra.log 2>&1 &

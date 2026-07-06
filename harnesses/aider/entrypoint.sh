@@ -16,4 +16,4 @@ AIDER_HIST="--chat-history-file /root/.aider/chat.history.md \
 
 tmux new-session -d -s main -c /workspace
 tmux send-keys -t main "aider --model openai/${MODEL_NAME} --no-auto-commits $AIDER_HIST" Enter
-exec ttyd --port 7681 --writable --check-origin=false -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main
+exec ttyd --port 7681 --writable --check-origin=false -t fontSize=18 -t scrollback=10000 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main
