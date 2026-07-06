@@ -18,6 +18,24 @@
       selectable on mobile) plus a tappable list of URLs found in that text.
       Tap "Copy all" to copy everything; long-press in the textarea to select
       any range with the native handles.
+   7. Scroll bridge — mouse-wheel / touch-drag scrolling of the actual chat
+      history in full-screen TUIs (Claude Code, opencode). Those apps run on
+      the terminal's alternate screen buffer, which by spec has no scrollback
+      of its own (not tmux's history-limit, not xterm.js's local buffer) --
+      the app manages its own scrollable viewport, driven by real mouse-wheel
+      input. tmux.conf sets `mouse off` (so a plain drag stays a native
+      browser selection for reliable clipboard copy, see #2/#2b above) which
+      means xterm.js never negotiates real mouse-reporting escapes and never
+      fires them on wheel/touch either. Fix: on wheel/touch-drag, synthesize
+      the SGR mouse-wheel escape ourselves and feed it via term.input() --
+      confirmed empirically that tmux passes these straight through to the
+      pane's app untouched regardless of its own `mouse` setting (tmux only
+      *intercepts* mouse escapes for its own copy-mode when `mouse on`; with
+      `mouse off` unrecognized bytes just relay to whatever is attached), so
+      neither Claude Code's nor opencode's own mouse-driven scroll needs tmux
+      mouse on, and plain click/drag never emits these bytes, so copy is
+      unaffected. Gated to the alternate screen only, so a plain shell prompt
+      keeps xterm.js's normal local scrollback behavior untouched.
 */
 (function () {
   function decodeUtf8(s) { try { return decodeURIComponent(escape(s)); } catch (e) { return s; } }
@@ -341,6 +359,63 @@
         document.body.appendChild(panel);
         installed.push('mobile-panel');
       }
+    } catch (e) {}
+
+    /* 7. Scroll bridge -- see header comment. Only acts on the alternate
+       screen; a plain shell prompt (normal buffer) is left to xterm.js's own
+       default wheel/scroll handling. */
+    try {
+      var scrollEl = term.element || document;
+
+      function inAltScreen() {
+        try { return term.buffer.active.type === 'alternate'; } catch (e) { return false; }
+      }
+
+      function sgrWheel(clientX, clientY, up) {
+        var rect = scrollEl.getBoundingClientRect();
+        var cellW = rect.width / Math.max(term.cols, 1);
+        var cellH = rect.height / Math.max(term.rows, 1);
+        var col = Math.min(term.cols, Math.max(1, Math.floor((clientX - rect.left) / cellW) + 1));
+        var row = Math.min(term.rows, Math.max(1, Math.floor((clientY - rect.top) / cellH) + 1));
+        var btn = up ? 64 : 65;
+        term.input('\x1b[<' + btn + ';' + col + ';' + row + 'M', true);
+      }
+
+      scrollEl.addEventListener('wheel', function (e) {
+        if (!inAltScreen()) return;
+        e.preventDefault();
+        var steps = Math.max(1, Math.min(6, Math.round(Math.abs(e.deltaY) / 40)));
+        for (var i = 0; i < steps; i++) sgrWheel(e.clientX, e.clientY, e.deltaY < 0);
+      }, { passive: false });
+
+      /* Touch-drag -> one synthetic wheel step per ~2 text rows of movement.
+         "Natural" direction: dragging down reveals earlier (higher) content,
+         i.e. wheel-up, matching iOS/Android scroll convention. */
+      var touchY = null, touchX = null;
+      scrollEl.addEventListener('touchstart', function (e) {
+        if (!inAltScreen() || e.touches.length !== 1) { touchY = null; return; }
+        touchY = e.touches[0].clientY;
+        touchX = e.touches[0].clientX;
+      }, { passive: true });
+      scrollEl.addEventListener('touchmove', function (e) {
+        if (touchY === null || !inAltScreen() || e.touches.length !== 1) return;
+        var rect = scrollEl.getBoundingClientRect();
+        var step = (rect.height / Math.max(term.rows, 1)) * 2;
+        var curY = e.touches[0].clientY;
+        var dy = curY - touchY;
+        var moved = false;
+        while (Math.abs(dy) >= step) {
+          sgrWheel(touchX, curY, dy > 0);
+          dy += dy > 0 ? -step : step;
+          moved = true;
+        }
+        if (moved) {
+          e.preventDefault();
+          touchY = curY - dy;
+        }
+      }, { passive: false });
+
+      installed.push('scroll-bridge');
     } catch (e) {}
 
     try { console.log('[lab-kbfix] handlers: ' + installed.join(', ')); } catch (_) {}

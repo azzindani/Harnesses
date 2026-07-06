@@ -128,6 +128,12 @@ Every harness that persists conversations writes into `./history/<harness>/` —
 
 Two of the eleven harnesses (Claude Code, OpenCode) ship a light "notepad" theme (`#ffffff` background) instead of `ttyd`'s plain dark default — set both at the `ttyd`/xterm.js layer (the actual background painter) and in the CLI's own theme config (Claude Code's `settings.json.theme`, OpenCode's custom theme file). Dynamic sessions inherit whichever theme (or lack of one) their harness type's base session uses, so they always match rather than silently falling back to a different look.
 
+## Copy/paste and scrolling in the browser terminal
+
+`tmux.conf` runs with `mouse off` on purpose: it leaves the mouse to the browser, so a plain drag makes a native browser text selection that `ttyd-kbfix.html` auto-copies to your OS clipboard (reliable — happens inside the drag gesture, unlike tmux's own OSC 52 copy, which browsers silently drop outside a user gesture). Ctrl+C/Ctrl+V and a mobile 📋 panel (tap to view/select/copy the visible text) work the same way on both desktop and touch.
+
+Claude Code and OpenCode run in the terminal's alternate-screen buffer (like `vim`/`htop`), which by spec has no scrollback of its own — neither tmux's `history-limit` nor xterm.js's local buffer apply there. Instead, both apps manage their own scrollable transcript, driven by real mouse-wheel input. Since `mouse off` stops xterm.js from ever entering native mouse-reporting mode, `ttyd-kbfix.html` bridges this itself: on wheel-scroll or touch-drag (only while on the alternate screen), it synthesizes the SGR mouse-wheel escape sequence and feeds it straight to the app via `term.input()`. tmux only intercepts mouse escapes for its own copy-mode when `mouse on`; with `mouse off` it just relays the bytes to whatever's attached, so this reaches Claude Code/OpenCode's own scroll handling untouched, without needing tmux mouse on and without affecting click/drag-to-copy. A plain shell prompt (normal buffer) is left alone, so xterm.js's default local scrollback still works there as-is.
+
 ## Environment variables
 
 See `.env.example` for the full, commented list. Highlights beyond the provider block:

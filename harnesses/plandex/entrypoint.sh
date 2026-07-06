@@ -101,4 +101,4 @@ plandex models custom -f /workspace/custom-models.json --save >/dev/null 2>&1 \
 tmux new-session -d -s main -c /workspace
 # Pre-fill the prompt so the user just hits Enter to start with the lab pack.
 tmux send-keys -t main "plandex" Enter
-exec ttyd --port 7681 --writable --check-origin=false -t fontSize=18 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main
+exec ttyd --port 7681 --writable --check-origin=false -t fontSize=18 -t scrollback=10000 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main
