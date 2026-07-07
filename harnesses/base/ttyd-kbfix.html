@@ -445,7 +445,19 @@
 
       /* Touch-drag -> one PageUp/PageDown per ~120px of movement. "Natural"
          direction: dragging down reveals earlier content (PageUp), matching
-         iOS/Android scroll convention. */
+         iOS/Android scroll convention.
+
+         touch-action:none + an UNCONDITIONAL preventDefault() on every
+         touchmove (not just once the 120px step threshold is crossed) are
+         both needed: a real mobile browser decides whether to hand a drag
+         to its own native page-pan/scroll based on the FIRST touchmove of
+         the gesture. preventDefault()-ing only later touchmove events (once
+         enough delta has accumulated) is too late -- native scrolling has
+         already taken over the gesture by then, so our own PageUp/PageDown
+         steps never had a chance. touch-action:none stops the browser from
+         ever engaging native panning here in the first place; the JS
+         preventDefault is a second line of defense. */
+      scrollEl.style.touchAction = 'none';
       var touchY = null, touchAccum = 0;
       var TOUCH_STEP = 120;
       scrollEl.addEventListener('touchstart', function (e) {
@@ -455,16 +467,14 @@
       }, { passive: true });
       scrollEl.addEventListener('touchmove', function (e) {
         if (touchY === null || !inAltScreen() || e.touches.length !== 1) return;
+        e.preventDefault();
         var curY = e.touches[0].clientY;
         touchAccum += curY - touchY;
         touchY = curY;
-        var moved = false;
         while (Math.abs(touchAccum) >= TOUCH_STEP) {
           scrollStep(touchAccum > 0);
           touchAccum += touchAccum > 0 ? -TOUCH_STEP : TOUCH_STEP;
-          moved = true;
         }
-        if (moved) e.preventDefault();
       }, { passive: false });
 
       installed.push('scroll-bridge');
