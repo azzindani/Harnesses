@@ -485,17 +485,26 @@
       if (navigator.maxTouchPoints > 0 || ('ontouchstart' in window)) {
         var kbStyle = document.createElement('style');
         kbStyle.textContent =
-          '#lab-keys{position:fixed;left:0;right:0;bottom:0;z-index:9998;' +
-            'display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;' +
+          '#lab-keys-wrap{position:fixed;left:0;right:0;bottom:0;z-index:9998;}' +
+          '#lab-keys{display:flex;gap:4px;overflow-x:auto;-webkit-overflow-scrolling:touch;' +
             'padding:6px 8px;background:rgba(18,18,18,0.95);' +
             'border-top:1px solid rgba(255,255,255,0.15);}' +
-          '#lab-keys button{flex:0 0 auto;min-width:40px;padding:8px 10px;' +
+          /* Fade + chevron on the right edge hints there are more keys to
+             scroll to (Ctrl/Alt/Shift/Home/End/Esc/Tab don't fit on one
+             screen alongside the higher-priority arrows/paging keys). */
+          '#lab-keys-hint{position:absolute;top:0;right:0;bottom:0;width:28px;' +
+            'pointer-events:none;display:flex;align-items:center;justify-content:flex-end;' +
+            'padding-right:2px;color:rgba(255,255,255,0.55);font-size:11px;' +
+            'background:linear-gradient(to right, rgba(18,18,18,0), rgba(18,18,18,0.95) 55%);}' +
+          '#lab-keys button{flex:0 0 auto;min-width:38px;padding:7px 9px;' +
             'border:1px solid rgba(255,255,255,0.22);border-radius:6px;' +
             'background:#2a2a2a;color:#ddd;font-size:13px;font-family:monospace;' +
             'cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;}' +
           '#lab-keys button.lab-key-active{background:#0e639c;color:#fff;border-color:#0e639c;}';
         document.head.appendChild(kbStyle);
 
+        var wrap = document.createElement('div');
+        wrap.id = 'lab-keys-wrap';
         var bar = document.createElement('div');
         bar.id = 'lab-keys';
 
@@ -512,8 +521,20 @@
           return function () { sendKey(key, code, keyCode, consumeArmed()); };
         }
 
+        /* Arrows and paging first -- the keys people actually reach for
+           while reading/scrolling a transcript -- so they're visible without
+           scrolling the bar on a narrow phone screen. Less-urgent keys
+           (Esc/Tab/Home/End/Ctrl/Alt/Shift) come after and need a swipe. */
+        addKeyBtn('←', tapKey('ArrowLeft', 'ArrowLeft', 37));
+        addKeyBtn('↑', tapKey('ArrowUp', 'ArrowUp', 38));
+        addKeyBtn('↓', tapKey('ArrowDown', 'ArrowDown', 40));
+        addKeyBtn('→', tapKey('ArrowRight', 'ArrowRight', 39));
+        addKeyBtn('PgUp', tapKey('PageUp', 'PageUp', 33));
+        addKeyBtn('PgDn', tapKey('PageDown', 'PageDown', 34));
         addKeyBtn('Esc', tapKey('Escape', 'Escape', 27));
         addKeyBtn('Tab', tapKey('Tab', 'Tab', 9));
+        addKeyBtn('Home', tapKey('Home', 'Home', 36));
+        addKeyBtn('End', tapKey('End', 'End', 35));
 
         var ctrlBtn  = addKeyBtn('Ctrl',  function () { setArmed('ctrl', !armed.ctrl); });
         var altBtn   = addKeyBtn('Alt',   function () { setArmed('alt', !armed.alt); });
@@ -524,16 +545,24 @@
           shiftBtn.classList.toggle('lab-key-active', armed.shift);
         });
 
-        addKeyBtn('Home', tapKey('Home', 'Home', 36));
-        addKeyBtn('End', tapKey('End', 'End', 35));
-        addKeyBtn('PgUp', tapKey('PageUp', 'PageUp', 33));
-        addKeyBtn('PgDn', tapKey('PageDown', 'PageDown', 34));
-        addKeyBtn('←', tapKey('ArrowLeft', 'ArrowLeft', 37));
-        addKeyBtn('↑', tapKey('ArrowUp', 'ArrowUp', 38));
-        addKeyBtn('↓', tapKey('ArrowDown', 'ArrowDown', 40));
-        addKeyBtn('→', tapKey('ArrowRight', 'ArrowRight', 39));
+        var hint = document.createElement('div');
+        hint.id = 'lab-keys-hint';
+        hint.textContent = '›';
+        wrap.appendChild(bar);
+        wrap.appendChild(hint);
+        document.body.appendChild(wrap);
 
-        document.body.appendChild(bar);
+        /* Only show the "more keys" hint while there's actually somewhere
+           left to scroll to -- hide it once the bar doesn't overflow, or
+           once the user has scrolled it all the way to the end. */
+        function updateHint() {
+          var overflow = bar.scrollWidth - bar.clientWidth;
+          hint.style.display = (overflow > 4 && bar.scrollLeft < overflow - 4) ? 'flex' : 'none';
+        }
+        bar.addEventListener('scroll', updateHint, { passive: true });
+        window.addEventListener('resize', updateHint);
+        updateHint();
+
         installed.push('key-toolbar');
       }
     } catch (e) {}
