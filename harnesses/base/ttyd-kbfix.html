@@ -22,20 +22,25 @@
       history in full-screen TUIs (Claude Code, opencode). Those apps run on
       the terminal's alternate screen buffer, which by spec has no scrollback
       of its own (not tmux's history-limit, not xterm.js's local buffer) --
-      the app manages its own scrollable viewport, driven by real mouse-wheel
-      input. tmux.conf sets `mouse off` (so a plain drag stays a native
-      browser selection for reliable clipboard copy, see #2/#2b above) which
-      means xterm.js never negotiates real mouse-reporting escapes and never
-      fires them on wheel/touch either. Fix: on wheel/touch-drag, synthesize
-      the SGR mouse-wheel escape ourselves and feed it via term.input() --
-      confirmed empirically that tmux passes these straight through to the
-      pane's app untouched regardless of its own `mouse` setting (tmux only
-      *intercepts* mouse escapes for its own copy-mode when `mouse on`; with
-      `mouse off` unrecognized bytes just relay to whatever is attached), so
-      neither Claude Code's nor opencode's own mouse-driven scroll needs tmux
-      mouse on, and plain click/drag never emits these bytes, so copy is
-      unaffected. Gated to the alternate screen only, so a plain shell prompt
-      keeps xterm.js's normal local scrollback behavior untouched.
+      the app manages its own scrollable viewport, driven by real key input
+      (PageUp/PageDown -- confirmed empirically against both apps). On
+      wheel/touch-drag (gated to the alternate screen only; a plain shell
+      prompt is left to xterm.js's normal local scrollback), we synthesize a
+      real PageUp/PageDown KeyboardEvent and dispatch it at term.textarea --
+      the exact element xterm.js itself listens on for physical typing, so it
+      flows through the identical path a real keypress would and xterm picks
+      the correct escape variant for whatever mode the app has set. (Tried
+      first: term.input() -- not exposed on this ttyd build's xterm.js, it's
+      gated behind the "proposed API" flag; term.paste() -- sanitizes/strips
+      the ESC byte, so raw SGR mouse escapes never survive it. Both confirmed
+      via a real headless-browser run against a live session, which is also
+      how the KeyboardEvent approach below was verified end-to-end.)
+   8. On-screen key toolbar (touch devices only) — Esc / Tab / Ctrl / Alt /
+      Shift / Home / End / PgUp / PgDn / arrows, Termius/Termux-style, for
+      keys a mobile on-screen keyboard doesn't have. Ctrl/Alt/Shift are
+      one-shot sticky toggles: tap to arm, then the *next* keypress (physical
+      or another toolbar button) gets that modifier merged in, via the same
+      attachCustomKeyEventHandler hook used for Ctrl+C/V (#3).
 */
 (function () {
   function decodeUtf8(s) { try { return decodeURIComponent(escape(s)); } catch (e) { return s; } }
@@ -60,6 +65,43 @@
 
   ready(function (term) {
     var installed = [];
+
+    /* Shared: synthesize a real KeyboardEvent on term.textarea -- the exact
+       element xterm.js listens on for physical typing, so this flows through
+       the identical path a real keypress would (needed since term.input()/
+       paste() can't carry this, see #7/#8 in the header comment). Used by
+       the Ctrl+C/V handler's sticky-modifier support (#3), the scroll bridge
+       (#7), and the on-screen key toolbar (#8). */
+    var taEl = term.textarea || term.element;
+    var synthesizing = false;
+    function sendKey(key, code, keyCode, mods) {
+      mods = mods || {};
+      var opts = {
+        key: key, code: code, keyCode: keyCode, which: keyCode,
+        ctrlKey: !!mods.ctrl, altKey: !!mods.alt, shiftKey: !!mods.shift,
+        bubbles: true, cancelable: true
+      };
+      synthesizing = true;
+      taEl.dispatchEvent(new KeyboardEvent('keydown', opts));
+      taEl.dispatchEvent(new KeyboardEvent('keyup', opts));
+      synthesizing = false;
+    }
+
+    /* One-shot sticky Ctrl/Alt/Shift, armed by the key-toolbar (#8) and
+       consumed by the next keypress -- either a real one (intercepted in
+       #3's attachCustomKeyEventHandler) or another toolbar tap. */
+    var armed = { ctrl: false, alt: false, shift: false };
+    var armedListeners = [];
+    function armedActive() { return armed.ctrl || armed.alt || armed.shift; }
+    function setArmed(k, v) {
+      armed[k] = v;
+      armedListeners.forEach(function (fn) { try { fn(); } catch (e) {} });
+    }
+    function consumeArmed() {
+      var m = { ctrl: armed.ctrl, alt: armed.alt, shift: armed.shift };
+      if (armedActive()) { armed.ctrl = armed.alt = armed.shift = false; armedListeners.forEach(function (fn) { try { fn(); } catch (e) {} }); }
+      return m;
+    }
 
     /* 1. OSC 52 -> OS clipboard. tmux emits "52;c;<base64>" on copy. */
     try {
@@ -113,6 +155,19 @@
     }
     term.attachCustomKeyEventHandler(function (e) {
       if (e.type === 'keydown') {
+        /* Sticky Ctrl/Alt/Shift armed via the key toolbar (#8) -- merge into
+           the next real keypress, then re-dispatch and swallow the original
+           (guarded by `synthesizing` so the re-dispatch doesn't recurse). */
+        if (armedActive() && !synthesizing &&
+            e.key !== 'Control' && e.key !== 'Alt' && e.key !== 'Shift' && e.key !== 'Meta') {
+          var m = consumeArmed();
+          e.preventDefault();
+          e.stopPropagation();
+          sendKey(e.key, e.code, e.keyCode, {
+            ctrl: e.ctrlKey || m.ctrl, alt: e.altKey || m.alt, shift: e.shiftKey || m.shift
+          });
+          return false;
+        }
         var mod = (e.ctrlKey || e.metaKey) && !e.altKey;
         if (mod) {
           var k = (e.key || '').toLowerCase();
@@ -371,51 +426,106 @@
         try { return term.buffer.active.type === 'alternate'; } catch (e) { return false; }
       }
 
-      function sgrWheel(clientX, clientY, up) {
-        var rect = scrollEl.getBoundingClientRect();
-        var cellW = rect.width / Math.max(term.cols, 1);
-        var cellH = rect.height / Math.max(term.rows, 1);
-        var col = Math.min(term.cols, Math.max(1, Math.floor((clientX - rect.left) / cellW) + 1));
-        var row = Math.min(term.rows, Math.max(1, Math.floor((clientY - rect.top) / cellH) + 1));
-        var btn = up ? 64 : 65;
-        term.input('\x1b[<' + btn + ';' + col + ';' + row + 'M', true);
+      function scrollStep(up) {
+        if (up) sendKey('PageUp', 'PageUp', 33);
+        else sendKey('PageDown', 'PageDown', 34);
       }
 
+      /* One PageUp/PageDown per wheel notch, throttled so a fast trackpad
+         flick (which fires many wheel events) doesn't fire a burst of jumps. */
+      var wheelBusy = false;
       scrollEl.addEventListener('wheel', function (e) {
         if (!inAltScreen()) return;
         e.preventDefault();
-        var steps = Math.max(1, Math.min(6, Math.round(Math.abs(e.deltaY) / 40)));
-        for (var i = 0; i < steps; i++) sgrWheel(e.clientX, e.clientY, e.deltaY < 0);
+        if (wheelBusy) return;
+        wheelBusy = true;
+        scrollStep(e.deltaY < 0);
+        setTimeout(function () { wheelBusy = false; }, 150);
       }, { passive: false });
 
-      /* Touch-drag -> one synthetic wheel step per ~2 text rows of movement.
-         "Natural" direction: dragging down reveals earlier (higher) content,
-         i.e. wheel-up, matching iOS/Android scroll convention. */
-      var touchY = null, touchX = null;
+      /* Touch-drag -> one PageUp/PageDown per ~120px of movement. "Natural"
+         direction: dragging down reveals earlier content (PageUp), matching
+         iOS/Android scroll convention. */
+      var touchY = null, touchAccum = 0;
+      var TOUCH_STEP = 120;
       scrollEl.addEventListener('touchstart', function (e) {
         if (!inAltScreen() || e.touches.length !== 1) { touchY = null; return; }
         touchY = e.touches[0].clientY;
-        touchX = e.touches[0].clientX;
+        touchAccum = 0;
       }, { passive: true });
       scrollEl.addEventListener('touchmove', function (e) {
         if (touchY === null || !inAltScreen() || e.touches.length !== 1) return;
-        var rect = scrollEl.getBoundingClientRect();
-        var step = (rect.height / Math.max(term.rows, 1)) * 2;
         var curY = e.touches[0].clientY;
-        var dy = curY - touchY;
+        touchAccum += curY - touchY;
+        touchY = curY;
         var moved = false;
-        while (Math.abs(dy) >= step) {
-          sgrWheel(touchX, curY, dy > 0);
-          dy += dy > 0 ? -step : step;
+        while (Math.abs(touchAccum) >= TOUCH_STEP) {
+          scrollStep(touchAccum > 0);
+          touchAccum += touchAccum > 0 ? -TOUCH_STEP : TOUCH_STEP;
           moved = true;
         }
-        if (moved) {
-          e.preventDefault();
-          touchY = curY - dy;
-        }
+        if (moved) e.preventDefault();
       }, { passive: false });
 
       installed.push('scroll-bridge');
+    } catch (e) {}
+
+    /* 8. On-screen key toolbar (touch devices only) -- see header comment. */
+    try {
+      if (navigator.maxTouchPoints > 0 || ('ontouchstart' in window)) {
+        var kbStyle = document.createElement('style');
+        kbStyle.textContent =
+          '#lab-keys{position:fixed;left:0;right:0;bottom:0;z-index:9998;' +
+            'display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;' +
+            'padding:6px 8px;background:rgba(18,18,18,0.95);' +
+            'border-top:1px solid rgba(255,255,255,0.15);}' +
+          '#lab-keys button{flex:0 0 auto;min-width:40px;padding:8px 10px;' +
+            'border:1px solid rgba(255,255,255,0.22);border-radius:6px;' +
+            'background:#2a2a2a;color:#ddd;font-size:13px;font-family:monospace;' +
+            'cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;}' +
+          '#lab-keys button.lab-key-active{background:#0e639c;color:#fff;border-color:#0e639c;}';
+        document.head.appendChild(kbStyle);
+
+        var bar = document.createElement('div');
+        bar.id = 'lab-keys';
+
+        function addKeyBtn(label, onTap) {
+          var b = document.createElement('button');
+          b.textContent = label;
+          b.addEventListener('touchstart', function (e) { e.preventDefault(); onTap(b); }, { passive: false });
+          b.addEventListener('click', function () { onTap(b); });
+          bar.appendChild(b);
+          return b;
+        }
+
+        function tapKey(key, code, keyCode) {
+          return function () { sendKey(key, code, keyCode, consumeArmed()); };
+        }
+
+        addKeyBtn('Esc', tapKey('Escape', 'Escape', 27));
+        addKeyBtn('Tab', tapKey('Tab', 'Tab', 9));
+
+        var ctrlBtn  = addKeyBtn('Ctrl',  function () { setArmed('ctrl', !armed.ctrl); });
+        var altBtn   = addKeyBtn('Alt',   function () { setArmed('alt', !armed.alt); });
+        var shiftBtn = addKeyBtn('Shift', function () { setArmed('shift', !armed.shift); });
+        armedListeners.push(function () {
+          ctrlBtn.classList.toggle('lab-key-active', armed.ctrl);
+          altBtn.classList.toggle('lab-key-active', armed.alt);
+          shiftBtn.classList.toggle('lab-key-active', armed.shift);
+        });
+
+        addKeyBtn('Home', tapKey('Home', 'Home', 36));
+        addKeyBtn('End', tapKey('End', 'End', 35));
+        addKeyBtn('PgUp', tapKey('PageUp', 'PageUp', 33));
+        addKeyBtn('PgDn', tapKey('PageDown', 'PageDown', 34));
+        addKeyBtn('←', tapKey('ArrowLeft', 'ArrowLeft', 37));
+        addKeyBtn('↑', tapKey('ArrowUp', 'ArrowUp', 38));
+        addKeyBtn('↓', tapKey('ArrowDown', 'ArrowDown', 40));
+        addKeyBtn('→', tapKey('ArrowRight', 'ArrowRight', 39));
+
+        document.body.appendChild(bar);
+        installed.push('key-toolbar');
+      }
     } catch (e) {}
 
     try { console.log('[lab-kbfix] handlers: ' + installed.join(', ')); } catch (_) {}
