@@ -30,20 +30,11 @@ build_index() {
     done
     kill "$p" 2>/dev/null || true
     [ -s /run/_ttyd_idx.html ] || return 1
-    # Inject a mobile viewport meta tag (ttyd's stock index.html ships without
-    # one, so real phone browsers fall back to a ~980px desktop-width layout
-    # and zoom the whole page out to fit -- confirmed via a real-device-
-    # profile headless browser test, where the terminal element measured
-    # ~2.5x the actual viewport size; that scale mismatch maps touch/tap
-    # coordinates wrong and made the page feel broken/zoomed-out on a real
-    # phone even though desktop and an explicit-viewport test both looked
-    # fine) right after <head>, and the kbfix snippet right before </body>.
+    # Inject the kbfix snippet right before </body>.
     SNIPPET="$SNIPPET" python3 - /run/_ttyd_idx.html "$INDEX" <<'PY' || return 1
 import os, sys
 src_path, out_path = sys.argv[1], sys.argv[2]
 src = open(src_path, encoding='utf-8', errors='surrogateescape').read()
-viewport = '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">'
-src = src.replace('<head>', '<head>' + viewport, 1) if '<head>' in src else viewport + src
 snip = open(os.environ['SNIPPET'], encoding='utf-8').read()
 src = src.replace('</body>', snip + '</body>', 1) if '</body>' in src else src + snip
 open(out_path, 'w', encoding='utf-8', errors='surrogateescape').write(src)
