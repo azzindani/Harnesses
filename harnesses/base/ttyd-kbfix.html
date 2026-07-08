@@ -41,6 +41,12 @@
       one-shot sticky toggles: tap to arm, then the *next* keypress (physical
       or another toolbar button) gets that modifier merged in, via the same
       attachCustomKeyEventHandler hook used for Ctrl+C/V (#3).
+   9. Auto-reconnect — ttyd's client only auto-retries the websocket on an
+      abnormal close; a clean close (code 1000, which is what a backgrounded
+      mobile tab typically gets) instead shows a "Press Enter to Reconnect"
+      overlay and waits for a real keypress. We detect that overlay and
+      synthesize the Enter keypress so reconnecting after backgrounding/
+      reopening the tab needs no manual action (not even a page reload).
 */
 (function () {
   function decodeUtf8(s) { try { return decodeURIComponent(escape(s)); } catch (e) { return s; } }
@@ -565,6 +571,41 @@
 
         installed.push('key-toolbar');
       }
+    } catch (e) {}
+
+    /* 9. Auto-reconnect. ttyd's own client (see the served bundle's
+       onSocketClose) only auto-retries the websocket when it closes with an
+       abnormal code; a *clean* close (code 1000) instead shows a
+       "Press <Enter> to Reconnect" overlay and just waits for a real
+       keypress. Mobile browsers commonly tear down a backgrounded tab's
+       socket with a clean close, so coming back to the tab (or reopening it
+       from the OS's recent-tabs list, which can restore the same page
+       instance from bfcache) left the terminal looking "stuck" until the
+       user did a full page reload. There's no ttyd flag for this, so we
+       detect that specific overlay text and synthesize the Enter keypress
+       ourselves via the same textarea KeyboardEvent path used above -- xterm
+       treats it exactly like the user pressing Enter, which is what the
+       overlay's own one-shot listener is waiting for. */
+    try {
+      function findReconnectOverlay() {
+        if (!term.element) return null;
+        var kids = term.element.children;
+        for (var i = 0; i < kids.length; i++) {
+          var txt = kids[i].textContent || '';
+          if (txt.indexOf('Press') !== -1 && txt.indexOf('Reconnect') !== -1) return kids[i];
+        }
+        return null;
+      }
+      function tryAutoReconnect() {
+        if (findReconnectOverlay()) sendKey('Enter', 'Enter', 13);
+      }
+      setInterval(tryAutoReconnect, 800);
+      document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) tryAutoReconnect();
+      });
+      window.addEventListener('pageshow', tryAutoReconnect);
+      window.addEventListener('focus', tryAutoReconnect);
+      installed.push('auto-reconnect');
     } catch (e) {}
 
     try { console.log('[lab-kbfix] handlers: ' + installed.join(', ')); } catch (_) {}
