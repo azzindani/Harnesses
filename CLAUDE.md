@@ -1,20 +1,12 @@
-# CLAUDE.md — Multi-Harness AI Lab with NVIDIA NIM
+# CLAUDE.md — Harnesses: Multi-Agent Coding Lab
 
-## Project Overview
+## Project overview
 
-This project runs **multiple AI coding agent harnesses** inside Docker containers, all backed by **NVIDIA NIM** inference endpoints. Each harness gets its own subdomain, its own access token, and its own terminal session accessible from a browser. Containers sleep when idle and wake on first request — keeping the VPS footprint near zero when nothing is in use.
+A personal lab for running multiple AI coding CLI agents ("harnesses") side by side — Claude Code, Aider, OpenCode, Crush, gptme, Goose, Plandex, Qwen Code, Codex CLI, Pi, and Droid — each wrapped in `ttyd` (browser terminal) + `tmux` (session persistence) inside its own Docker container, all fed by one shared model provider config, each reachable from a browser on its own subdomain. Containers sleep when idle and wake on first request.
 
-**What this is:**
-- A lab environment for testing and comparing AI coding harnesses against the same project/data
-- All harnesses share one NIM inference backend — swap model per harness, same codebase
-- Browser-based terminal access (ttyd + tmux) per harness, no SSH needed
-- On-demand container lifecycle: ~0 RAM when idle, wakes in 3–7 seconds on first access
+Status: **v0.1.0, single-operator lab, not multi-tenant.** One shared JWT secret, one shared model/provider budget. Treat it as an example/reference project, not a hardened multi-user service.
 
-**What this is NOT:**
-- This does not give you Anthropic's Claude models for free
-- You get the harness *interface and workflow* backed by NIM-hosted open models (DeepSeek, Kimi, GLM, Nemotron, etc.)
-
----
+`README.md` is the user-facing setup guide (quick start, env vars, troubleshooting) — read it first for "how do I run this." This file is the agent-facing map of how the pieces fit together and the gotchas that aren't obvious from the code.
 
 ## Architecture
 
@@ -22,358 +14,123 @@ This project runs **multiple AI coding agent harnesses** inside Docker container
 Browser
   │
   ▼
-[Caddy reverse proxy]  ← always on, ~20MB, handles HTTPS + subdomains
+Shared Caddy reverse proxy (external to this repo — see caddy-snippet.txt)
   │
-  ├── [Sablier middleware]  ← always on, ~10MB
-  │     starts container on first request
-  │     stops container after idle timeout (default: 30 min)
+  ├── on-demand TLS "ask" gate ──► auth:/ask   (is this hostname ours?)
   │
-  ├── [Auth sidecar]  ← always on, ~20MB
-  │     validates per-harness JWT tokens (30-day expiry)
-  │     one token per subdomain, all stored in single .env
-  │
-  └── Per-harness containers (stopped when idle, ~0MB):
-        ├── claude.lab.domain.com   → harness-claude
-        ├── aider.lab.domain.com         → harness-aider
-        ├── opencode.lab.domain.com      → harness-opencode
-        ├── crush.lab.domain.com         → harness-crush
-        ├── gptme.lab.domain.com         → harness-gptme
-        ├── goose.lab.domain.com         → harness-goose
-        ├── plandex.lab.domain.com       → harness-plandex
-        ├── qwencode.lab.domain.com      → harness-qwencode
-        ├── codex.lab.domain.com         → harness-codex
-        ├── pi.lab.domain.com            → harness-pi
-        └── droid.lab.domain.com         → harness-droid
-
-Each harness container:
-  ttyd (browser terminal) → tmux (session persistence) → harness CLI
-  All pointing to: NIM endpoint (port 8000)
-  All mounting:    /workspace (shared project + data volume)
-
-Always-running services: Caddy + Sablier + Auth (~100MB total)
-Per active harness: ~50–80MB RAM, 0% CPU when idle in terminal
+  └── forward_auth ──► auth:/verify
+        │                  ├─ validates the JWT cookie
+        │                  ├─ starts the target container if it's stopped
+        │                  ├─ for a "<harness>-<slug>" hostname, docker-execs
+        │                  │  an extra tmux+ttyd session into the SAME base
+        │                  │  container (not a separate container)
+        │                  └─ returns X-Harness-Upstream: harness-<type>:<port>
+        │
+        └── reverse_proxy {that header} ──► harness-<type> container
+                                                  │
+                                          ttyd (browser terminal)
+                                                  │
+                                          tmux ("main" + any extra sessions)
+                                                  │
+                                          the actual CLI (claude / aider / …)
 ```
 
----
+- **One FastAPI service (`auth/server.py`)** does JWT-gated login, Sablier-style container lifecycle (start on request, stop after `IDLE_TIMEOUT_MIN` idle), and — for OpenAI-compat harnesses and Claude Code's Anthropic proxy — a translating proxy in front of OpenRouter that serves a self-updating catalog of free, tool-calling models and can transparently fail over between them. There is no separate Sablier/Traefik container; this one service does all of it.
+- **No provider is hardcoded.** `.env.example` documents ready-made blocks for OpenRouter, NVIDIA NIM, build.nvidia.com, Anthropic, OpenAI, Groq, Together.ai, DeepSeek, and local Ollama — uncomment one. `PROVIDER_BASE_URL` / `PROVIDER_API_KEY` / `MODEL_NAME` (+ `PROVIDER_ANTHROPIC_URL` for Claude Code/Droid) drive all 11 harnesses.
+- **The reverse proxy is external to this repo.** A shared Caddy instance (this user's lives at `/root/caddy-router`, fronting other unrelated projects too) terminates TLS and routes subdomains in. `caddy-snippet.txt` is the block to append to it — this repo does not run Caddy itself.
+- **Multiple simultaneous sessions per harness are live**, not a future feature: `https://<harness>-<slug>.<domain>/?token=<jwt>` opens an extra tmux window + ttyd process inside that harness's one existing container/`/workspace` (up to `MAX_INSTANCES_PER_HARNESS`, default 5). It is deliberately not a separate container or volume per slug.
+- **Session history is one bind-mounted tree**, `./history/<harness>/`, not per-harness Docker volumes. `tar czf backup.tar.gz history/` backs up everything; `rm -rf history/` is the only thing that destroys it.
 
-## Supported Harnesses & NIM Configuration
+## Harnesses
 
-NIM exposes two compatible API protocols. Each harness uses one:
+| Harness | Protocol | Config | Notes |
+|---|---|---|---|
+| Claude Code | Anthropic (`/v1/messages`) | env vars | via `auth`'s `/anthropic` translating proxy |
+| Droid (Factory CLI) | Anthropic-shaped | `~/.factory/settings.json` | BYOK custom model |
+| Aider | OpenAI (`/v1/chat/completions`) | env vars | |
+| OpenCode | OpenAI-compat | `config.json` + `tui.json` + custom theme | |
+| Crush | OpenAI-compat | `crush.json` | unsets `OPENAI_*` so its own config wins |
+| gptme | OpenAI-compat | `config.toml` | |
+| Goose | OpenAI-compat | `config.yaml` | telemetry prompt disabled at boot |
+| Plandex | OpenAI-compat | custom model pack | self-hosted `plandex-server` + Postgres |
+| Qwen Code | OpenAI-compat | `settings.json` | auto-updater disabled (breaks TUI mid-session) |
+| Codex CLI | OpenAI `/responses` | `config.toml` | talks straight to the provider — bypasses the auth proxy, no free-model fallback |
+| Pi | OpenAI-compat | `~/.pi/agent/models.json` | stateless, no persisted history |
 
-### Anthropic-compatible (`/v1/messages`)
+Only Claude Code and OpenCode run day to day; the rest are stopped (not removed) to save RAM — `docker compose --profile on-demand up -d harness-<name>` brings any of them back. `openhands` and `kilocode` were dropped entirely (see git history) — do not re-add references to them.
 
-| Harness | Config method | Key env vars |
-|---|---|---|
-| **Claude Code** | env vars | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, all `ANTHROPIC_DEFAULT_*_MODEL` |
-| **Droid** | `~/.factory/config.json` | `base_url`, `api_key`, `provider: anthropic` |
+## Key files
 
-### OpenAI-compatible (`/v1/chat/completions`)
-
-| Harness | Config method | Key env vars / files |
-|---|---|---|
-| **Aider** | env vars | `OPENAI_API_BASE`, `OPENAI_API_KEY` |
-| **OpenCode** | `config.json` | `provider.nim.options.baseURL`, `@ai-sdk/openai-compatible` |
-| **Crush** | `crush.json` | `type: openai-compat`, `base_url`, `api_key` |
-| **gptme** | `config.toml` | `[[providers]]` block: `name`, `base_url`, `api_key_env` |
-| **Goose** | env vars | `OPENAI_API_KEY`, `OPENAI_HOST` |
-| **Plandex** | JSON config | custom provider block with `base_url` |
-| **Qwen Code** | `settings.json` | `modelProviders`, `openai`-type provider |
-| **Codex CLI** | env vars | `OPENAI_BASE_URL`, `OPENAI_API_KEY` |
-| **Pi** | `~/.pi/agent/models.json` | custom provider block with `base_url` |
-
-> **Critical:** The NIM model must support **tool calling**. Verify before relying on any harness:
-> ```bash
-> curl http://${NIM_ENDPOINT}:8000/v1/models
-> ```
-> Check that tool/function calling appears in the model's capability list.
-
----
-
-## Environment Variables
-
-All tokens and config live in a **single `.env` file** at project root. This is the source of truth.
-
-```env
-# NIM endpoint
-NIM_ENDPOINT=your-nim-host-or-ip
-NIM_SERVER_PORT=8000
-MODEL_NAME=<exact-model-id-from-nim>
-
-# JWT signing secret (used by auth sidecar to sign/verify all tokens)
-JWT_SECRET=your-long-random-secret-here
-
-# Per-harness access tokens (30-day expiry, generated by token script)
-TOKEN_CLAUDE=eyJhbGci...
-TOKEN_AIDER=eyJhbGci...
-TOKEN_OPENCODE=eyJhbGci...
-TOKEN_CRUSH=eyJhbGci...
-TOKEN_GPTME=eyJhbGci...
-TOKEN_GOOSE=eyJhbGci...
-TOKEN_PLANDEX=eyJhbGci...
-TOKEN_QWENCODE=eyJhbGci...
-TOKEN_CODEX=eyJhbGci...
-TOKEN_PI=eyJhbGci...
-TOKEN_DROID=eyJhbGci...
+```
+.env.example              # every provider block + all tunables, no secrets — keep in sync with docker-compose.yml
+docker-compose.yml        # harness-* services gated behind the `on-demand` profile; harness-base built first
+Makefile                  # tokens, build, up/down, router-reload (targets the external Caddy), validate
+auth/server.py            # JWT gate + container lifecycle + free-model proxy — the one always-on brain
+scripts/generate-tokens.py
+scripts/test-all-harnesses.sh
+harnesses/base/           # shared image: Dockerfile, tmux.conf, ttyd-wrapper.sh, ttyd-kbfix.html (clipboard/scroll), new-session.sh
+harnesses/<name>/          # Dockerfile + entrypoint.sh (writes that CLI's config, launches tmux+ttyd)
+web-mcp/                  # bundled DuckDuckGo search/fetch MCP sidecar
+caddy-snippet.txt         # append-only block for the external Caddy instance
+project/, data/, history/  # gitignored (except .gitkeep) — real working data, see below
 ```
 
-`.env` is **gitignored**. Commit `.env.example` with placeholder values instead.
+## Environment variables
 
-### Token generation
+Full documented list lives in `.env.example` — don't let it drift from what `docker-compose.yml` actually reads. Highlights: `HARNESS_BASE_DOMAIN`, `JWT_SECRET`, `IDLE_TIMEOUT_MIN`, `RETENTION_DAYS`, `MAX_INSTANCES_PER_HARNESS`, `TOKEN_<NAME>` (auto-filled by `auth` if blank), `FREE_FALLBACK` / `FREE_REQUIRE_TOOLS`, `FOLIO_MCP_URL` / `FOLIO_MCP_TOKEN`, `WEB_MCP_URL`.
 
-Run once to generate all tokens and paste output into `.env`:
+## Gotchas for anyone (agent or human) working in this repo
+
+- **`project/`, `data/`, `history/` are gitignored on purpose** (only `.gitkeep` is tracked) — they hold the shared workspace, datasets, and every harness's real conversation history. Never treat them as scratch during a "clean up" pass; never `rm -rf` them.
+- **Never commit a real domain, IP, or token.** Use the `lab.example.com` placeholder pattern already used throughout `.env.example`, `caddy-snippet.txt`, and `auth/server.py`'s fallback default — this was violated once (a real domain leaked into committed files) and had to be scrubbed before the v0.1.0 release.
+- **`.env` is real secrets, gitignored, never touched by CI beyond a throwaway `cp .env.example .env`** inside the CI runner. Don't run that `cp` against a local checkout that already has a real `.env` — it clobbers it.
+- **Multi-session is same-container, not per-slug containers.** If you're touching `auth/server.py`'s dynamic-session logic or `caddy-snippet.txt`, remember the routing target is `X-Harness-Upstream` (a container:port the auth service names), not something derivable from the hostname alone.
+- **Don't add a static per-hostname Caddy block alongside the wildcard block** in `caddy-snippet.txt` — an exact-hostname site and a wildcard site covering it are a policy conflict in Caddy's automatic HTTPS and this has broken cert resolution for every harness subdomain before.
+- **`gitleaks` runs in CI** (`.github/workflows/ci.yml` lint job) — if a new allowlist entry in `.gitleaks.toml` is ever needed, justify it with a comment; don't blanket-disable a rule.
+
+## Common operations
 
 ```bash
-JWT_SECRET=your-secret python3 scripts/generate-tokens.py
-```
+# Regenerate/rotate all tokens
+JWT_SECRET=$JWT_SECRET python3 scripts/generate-tokens.py    # or: make tokens-write
 
-Regenerate anytime to rotate tokens. Expiry period is configurable (default: 30 days).
+# Build base image first, then everything
+docker compose --profile build-only build harness-base && docker compose build   # or: make build
 
-### Claude Code specific env vars
+# Start the always-on service (harnesses come up on demand)
+docker compose up -d auth   # or: make up
 
-```bash
-export ANTHROPIC_BASE_URL="http://${NIM_ENDPOINT}:${NIM_SERVER_PORT}"
-export ANTHROPIC_API_KEY="not-used"           # NIM does not validate this
-export ANTHROPIC_CUSTOM_MODEL_OPTION="${MODEL_NAME}"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="${MODEL_NAME}"
-export ANTHROPIC_DEFAULT_SONNET_MODEL="${MODEL_NAME}"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="${MODEL_NAME}"
-export CLAUDE_CODE_SUBAGENT_MODEL="${MODEL_NAME}"
-```
-
-Missing any alias → 404 errors mid-session. Set all of them.
-
----
-
-## Container Lifecycle (Sablier)
-
-Containers are **not always running**. Sablier manages their lifecycle:
-
-- **Cold start:** 3–7 seconds (image already pulled). Sablier shows a "Starting..." loading page in the browser and auto-redirects when ready. No manual reload needed.
-- **Warm (active):** Zero added latency — keystroke → ttyd websocket → tmux → harness CLI is real-time.
-- **Idle timeout:** Container stops after 30 min of no active terminal activity. RAM freed to ~0.
-- **Image pull (first time only):** Can take minutes. Pre-pull all images on VPS setup.
-
-### Idle RAM profile
-
-```
-All 11 harnesses stopped:
-  Caddy + Sablier + Auth     ~100 MB
-  Docker daemon               ~50 MB
-  ─────────────────────────────────
-  Total idle                 ~150 MB   ← no hardware bound
-
-One harness active:
-  + harness container        ~50–80 MB
-  + ttyd + tmux               ~7 MB
-  ─────────────────────────────────
-  Total with 1 active        ~200–240 MB
-```
-
-A **1–2GB VPS** handles this setup comfortably.
-
----
-
-## Caddy Configuration
-
-Caddy is the existing reverse proxy. Do **not** replace it with Traefik.
-
-### Why Caddy over Traefik
-- Already installed on the VPS
-- Cleaner, more readable config (Caddyfile vs YAML labels)
-- Automatic HTTPS via Let's Encrypt — zero config
-- For a fixed set of lab harnesses, manual route definition is fine (no need for Docker auto-discovery)
-
-### Caddyfile pattern
-
-```caddyfile
-# Auth service
-auth.lab.domain.com {
-    reverse_proxy auth-service:8080
-}
-
-# Per-harness: auth check → Sablier wake → ttyd terminal
-claude.lab.domain.com {
-    forward_auth auth-service:8080 {
-        uri /verify?harness=claude
-        copy_headers Authorization
-    }
-    reverse_proxy sablier:10000 {
-        header_up X-Sablier-Session-Name "harness-claude"
-    }
-}
-
-aider.lab.domain.com {
-    forward_auth auth-service:8080 {
-        uri /verify?harness=aider
-        copy_headers Authorization
-    }
-    reverse_proxy sablier:10000 {
-        header_up X-Sablier-Session-Name "harness-aider"
-    }
-}
-# ... repeat for each harness
-```
-
-HTTPS is automatic. Each subdomain requires a DNS A record pointing to the VPS.
-
----
-
-## Access Token System
-
-- **One token per subdomain** — token for `aider` does not work on `claude`
-- **All tokens stored in one `.env`** — single source of truth, easy to rotate
-- **JWT-based** — stateless, no database needed, expiry configurable
-- **Auth sidecar** reads `.env` at startup, validates `Authorization: Bearer <token>` header per harness
-- **Not hardware-bound** — tokens are signed strings, valid from any browser/IP until expiry
-
-### Token security note
-
-If you need IP-pinning (token only valid from the IP it was issued to), configure it in the auth sidecar at token issuance time. For a personal lab this is usually unnecessary.
-
----
-
-## Session Persistence (tmux)
-
-Each harness container runs the CLI inside a **tmux session** so closing the browser does not kill the agent:
-
-```dockerfile
-# Container entrypoint
-CMD ["sh", "-c", "tmux new-session -d -s main '<harness-start-command>' && ttyd -p 7681 tmux attach-session -t main"]
-```
-
-- Close browser → tmux keeps harness running
-- Reopen browser → reconnects to the same session
-- Container stops (idle timeout) → session lost. This is expected for lab use.
-
----
-
-## Shared Project / Data Volume
-
-All harnesses mount the same workspace so you can test each harness against identical code and data:
-
-```yaml
-volumes:
-  - ./project:/workspace      # shared codebase
-  - ./data:/workspace/data    # shared datasets / lab results
-```
-
-Each harness sees `/workspace` inside its container. Changes made by one harness are immediately visible to others.
-
----
-
-## Build & Run Commands
-
-```bash
-# Pre-pull all harness images (do once on VPS setup)
-docker compose pull
-
-# Start always-on services only (Caddy handled externally)
-docker compose up -d sablier auth-service
-
-# Harness containers are started automatically by Sablier on first request
-# To manually start/stop a specific harness:
-docker compose start harness-aider
+# Manually stop/start one harness
 docker compose stop harness-aider
+docker compose up -d harness-aider
 
-# Regenerate all access tokens
-JWT_SECRET=${JWT_SECRET} python3 scripts/generate-tokens.py
+# Smoke-test every harness end to end
+./scripts/test-all-harnesses.sh
+./scripts/test-all-harnesses.sh aider crush     # subset
+STOP_AFTER=1 ./scripts/test-all-harnesses.sh    # stop each when done
 
-# Tail logs
-docker compose logs -f
-
-# Full teardown
-docker compose down
+# Reload the external Caddy after editing caddy-snippet.txt into it
+make router-reload
 ```
-
----
-
-## File Structure
-
-```
-project/
-├── CLAUDE.md                  ← this file
-├── .env                       ← all secrets and tokens (gitignored)
-├── .env.example               ← placeholder values (committed)
-├── docker-compose.yml         ← all services
-├── Caddyfile                  ← reverse proxy config
-│
-├── auth/
-│   ├── Dockerfile
-│   └── server.py              ← JWT issue + verify endpoint
-│
-├── scripts/
-│   └── generate-tokens.py    ← token generation script
-│
-├── harnesses/
-│   ├── claude/Dockerfile
-│   ├── aider/Dockerfile
-│   ├── opencode/Dockerfile
-│   ├── crush/Dockerfile
-│   ├── gptme/Dockerfile
-│   ├── goose/Dockerfile
-│   ├── plandex/Dockerfile
-│   ├── qwencode/Dockerfile
-│   ├── codex/Dockerfile
-│   ├── pi/Dockerfile
-│   └── droid/Dockerfile
-│
-├── project/                   ← shared codebase (mounted to /workspace)
-└── data/                      ← shared datasets (mounted to /workspace/data)
-```
-
----
-
-## Custom MCP Server (Optional)
-
-Claude Code and most other harnesses support MCP (Model Context Protocol) for external tool access. A custom MCP server lets harnesses reach resources outside Docker:
-
-- Lab instruments or hardware APIs
-- Databases or LIMS
-- Shared NAS storage
-- Host machine commands
-
-Register in `.claude/settings.json` (for Claude Code) or equivalent per harness:
-
-```json
-{
-  "mcpServers": {
-    "lab-tools": {
-      "url": "http://lab-mcp:4200/mcp",
-      "headers": { "Authorization": "Bearer ${MCP_AUTH_TOKEN}" }
-    }
-  }
-}
-```
-
-MCP server runs as a sidecar container on the same Docker Compose network, accessible by service name.
-
----
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `404 model does not exist` (Claude Code) | Built-in alias still points to Anthropic model ID | Set all `ANTHROPIC_DEFAULT_*_MODEL` to `${MODEL_NAME}` |
-| MCP tool calls silently ignored | NIM model doesn't support tool calling | Switch to a tool-calling capable model; verify with `/v1/models` |
-| Cold start shows error instead of loading page | Sablier not configured as proxy | Ensure Caddy routes through Sablier, not directly to harness |
-| 401 on subdomain | Wrong token or token expired | Check `TOKEN_<HARNESS>` in `.env`; regenerate if expired |
-| Token works on wrong subdomain | Auth sidecar not checking harness param | Verify `uri /verify?harness=<name>` in Caddyfile matches token |
-| Container never sleeps | Idle timeout not set | Configure `--sablier.session.duration` in Sablier |
-| Browser terminal disconnects | ttyd timeout | Set `ttyd --ping-interval` or increase timeout |
-| All harnesses use same model | Intended — NIM serves one model per deployment | Run separate NIM instances per model if A/B testing models |
-
----
+| `404 model does not exist` (Claude Code) | A model alias points at an unavailable model | Check `ANTHROPIC_DEFAULT_*_MODEL` / the auth service's free-model catalog |
+| MCP tool calls silently ignored | Configured model doesn't support tool calling | Pick a tool-calling model; verify via the provider's `/models` endpoint |
+| 401 on a subdomain | No/expired session cookie | Visit `https://<harness>.<domain>/?token=<jwt>` once |
+| Token works on the wrong subdomain | JWT `harness` claim doesn't match | Each token is pinned to one harness type (works on `claude` and any `claude-<slug>`) |
+| `<harness>-<slug>` URL 429s | `MAX_INSTANCES_PER_HARNESS` reached | Let an idle slug time out, or raise the cap |
+| Container never sleeps | `IDLE_TIMEOUT_MIN=0`, or a client still holds an open websocket | Idle sweep checks for a real TCP connection, not just `/verify` timestamps |
+| Caddy cert resolution breaks for a harness subdomain | A static per-hostname block was added alongside the wildcard block | Remove it — see the gotcha above |
+| All harnesses use the same model | Intended — one provider config drives all 11 | Change the provider block in `.env`, or run a second stack for comparison |
 
 ## References
 
-- [NVIDIA NIM: Use Claude Code with NIM](https://docs.nvidia.com/nim/large-language-models/latest/ai-assistant-integrations/claude-code.html)
-- [NVIDIA NIM: Tool Calling and MCP Integration](https://docs.nvidia.com/nim/large-language-models/latest/advanced-use-cases/tool-calling-and-mcp.html)
-- [NVIDIA NIM: API Reference](https://docs.nvidia.com/nim/large-language-models/latest/reference/api-reference.html)
 - [Claude Code Best Practices](https://code.claude.com/docs/en/best-practices)
 - [Claude Code Model Configuration](https://code.claude.com/docs/en/model-config)
-- [Sablier — On-demand container lifecycle](https://github.com/acouvreur/sablier)
-- [Docker: Run Claude Code with Docker](https://www.docker.com/blog/run-claude-code-with-docker/)
+- [Sablier — on-demand container lifecycle (design inspiration; not used directly)](https://github.com/acouvreur/sablier)
 - [Aider: OpenAI-compatible endpoints](https://aider.chat/docs/llms/openai-compat.html)
 - [gptme: Custom Providers](https://gptme.org/docs/custom-providers.html)
 - [Crush: Custom Provider Config](https://github.com/charmbracelet/crush/blob/main/README.md)
-- [OpenCode: Custom Provider Setup](https://haimaker.ai/blog/opencode-custom-provider-setup/)

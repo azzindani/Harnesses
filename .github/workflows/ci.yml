@@ -64,12 +64,17 @@ jobs:
 
       - name: caddyfile validate (snippet)
         run: |
-          # caddy-snippet.txt is meant to be appended to the shared
-          # /root/caddy-router/Caddyfile — it has no global block of its own.
-          # Wrap it in a minimal valid Caddyfile so `caddy validate` can parse.
+          # caddy-snippet.txt is meant to be appended to a shared Caddyfile —
+          # it has no global block of its own. Wrap it in a minimal valid
+          # Caddyfile so `caddy validate` can parse it. The snippet's wildcard
+          # site uses on-demand TLS, which requires an `ask` permission module
+          # in the global block (see caddy-snippet.txt's own prerequisites).
           cat > /tmp/Caddyfile <<'EOF'
           {
               email ci@example.com
+              on_demand_tls {
+                  ask http://harnesses-auth:8080/ask
+              }
           }
           EOF
           cat caddy-snippet.txt >> /tmp/Caddyfile

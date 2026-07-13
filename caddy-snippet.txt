@@ -1,33 +1,56 @@
 # ── Harnesses lab ─────────────────────────────────────────────────────────────
-# Append this block to /root/caddy-router/Caddyfile.
+# Append this block to your shared Caddyfile (e.g. /root/caddy-router/Caddyfile
+# if you're following this repo's layout). This repo does not run Caddy itself
+# — see the "Project layout" note in README.md.
 #
-# Current deployment: each harness has its own A record + dedicated site block.
-# Single-instance only.
+# Current deployment: ONE unified wildcard block handles every hostname under
+# *.lab.example.com — both the 11 base harnesses (claude, aider, opencode,
+# crush, gptme, goose, plandex, qwencode, codex, pi, droid) AND dynamic
+# `<harness>-<slug>` sessions (see README's "Multiple simultaneous sessions").
+# Every session of one harness type — base AND every dynamic slug — shares
+# that ONE harness-<type> container and its one /workspace, each on its own
+# port. Caddy doesn't need to know the port: it reverse-proxies to whatever
+# `X-Harness-Upstream` auth/server.py's /verify response returns (copied into
+# the request by the harness_auth snippet's copy_headers).
 #
-# Multi-instance via wildcard subdomains is implemented in the auth-service
-# (it creates per-slug containers + volumes on demand, with retention).  The
-# Caddy layer to activate it is at the bottom of this file under "## OPTIONAL".
-# Two prerequisites before enabling that:
+# Prerequisites:
+#   1. DNS:  add an `*.lab.example.com  A  <VPS_IP>` wildcard record at your
+#            DNS provider. Without this, `claude-foo.lab.example.com` (or even
+#            plain `claude.lab.example.com`) won't resolve no matter what
+#            Caddy does.
+#   2. Global block: on-demand TLS needs an `ask` endpoint so Caddy only
+#            issues certs for hostnames the auth service actually recognizes
+#            (otherwise anyone requesting `*.lab.example.com` triggers a cert
+#            issuance attempt). Add this to the GLOBAL { … } block at the top
+#            of your Caddyfile:
+#              on_demand_tls {
+#                  ask http://harnesses-auth:8080/ask
+#              }
 #
-#   1. DNS:  add an `*.lab.casava.space  A  <VPS_IP>` wildcard record at your
-#            DNS provider.  Without this, `claude-foo.lab.casava.space` won't
-#            resolve no matter what Caddy does.
-#   2. Caddy on-demand TLS: HTTP-01 + wildcard hostnames can be tricky.  Test
-#            after enabling that the existing harness subdomains still serve
-#            their certs from /data/caddy without re-issuance.
-#
-# Auth flow per visit (current single-instance layout):
-#   1. Visitor opens  https://<harness>.lab.casava.space/?token=<JWT_SECRET-or-jwt>
+# Auth flow per visit:
+#   1. Visitor opens  https://<harness>.lab.example.com/?token=<jwt>
+#      (or https://<harness>-<slug>.lab.example.com/?token=<jwt> for an extra
+#      session — any existing token for that harness type works).
 #   2. @hastoken handler rewrites to /issue and proxies to harnesses-auth.
-#      Auth validates the token, sets an HttpOnly cookie scoped to .lab.casava.space
-#      (one cookie unlocks every subdomain), and 302s to /.
-#   3. Subsequent requests hit forward_auth which calls auth /verify?harness=<name>.
-#      Auth validates the cookie AND ensures the container is running
-#      (cold-start blocks 3-7s).
-#   4. On 200, Caddy proxies to the harness container by service name.
+#      Auth validates the token, sets an HttpOnly cookie scoped to
+#      .lab.example.com (one cookie unlocks every subdomain), and 302s to /.
+#   3. Subsequent requests hit forward_auth, which calls auth
+#      /verify?harness=<name>. Auth validates the cookie, ensures the target
+#      container is running (cold-start blocks 3-7s), and for a
+#      `<harness>-<slug>` hostname docker-execs an extra tmux+ttyd session
+#      into that SAME base container if one isn't already there.
+#   4. On 200, Caddy proxies to the harness/port named in the response's
+#      X-Harness-Upstream header.
 #
 # Reload after editing:
 #   docker exec caddy-router caddy reload --config /etc/caddy/Caddyfile
+#
+# IMPORTANT: do not add a separate static `<name>.lab.example.com { ... }`
+# block alongside the wildcard block below — Caddy's automatic HTTPS treats
+# an exact-hostname site and a wildcard site covering it as a policy
+# conflict, which breaks cert resolution for every hostname under the
+# wildcard. Every hostname under *.lab.example.com belongs to the one
+# wildcard block, always.
 
 (harness_auth) {
     # Explicit route { } so directives execute in source order — without it,
@@ -41,9 +64,7 @@
         }
 
         # /pin and /unpin go back to the auth service (toggle retention for
-        # the instance corresponding to the calling subdomain).  Only meaningful
-        # once the wildcard block at the bottom of this file is enabled — for
-        # single-instance subdomains the auth-service returns a friendly 400.
+        # the dynamic session corresponding to the calling subdomain).
         @pinpath path /pin /unpin
         handle @pinpath {
             forward_auth harnesses-auth:8080 {
@@ -55,7 +76,11 @@
 
         forward_auth harnesses-auth:8080 {
             uri /verify?harness={args[0]}
-            copy_headers Cookie
+            # X-Harness-Upstream carries back the actual "container:port" to
+            # proxy to (auth allocates a port dynamically — multiple sessions
+            # of one harness type share a single container on different
+            # ports, so the hostname alone doesn't determine the target).
+            copy_headers Cookie X-Harness-Upstream
             # ttyd uses WebSockets; without stripping the upgrade headers
             # uvicorn rejects the /verify GET with 400 Bad Request and Caddy
             # then 403s the WS upgrade to the user's browser.
@@ -69,113 +94,18 @@
     }
 }
 
-claude.lab.casava.space {
-    import harness_auth claude
-    reverse_proxy harness-claude:7681 {
+# {http.request.host.labels.3} is the leftmost label of a 4-label
+# *.lab.example.com host (labels are indexed from the right: for
+# "claude-blog.lab.example.com" -> 0=com, 1=example, 2=lab, 3=claude-blog),
+# i.e. the full harness-or-instance slug — passed to harness_auth as the
+# /verify?harness= query param so auth/server.py knows which session this is.
+*.lab.example.com {
+    tls {
+        on_demand
+    }
+    import harness_auth {http.request.host.labels.3}
+    reverse_proxy {http.request.header.X-Harness-Upstream} {
         flush_interval -1
         header_up Host {host}
     }
 }
-
-aider.lab.casava.space {
-    import harness_auth aider
-    reverse_proxy harness-aider:7681 {
-        flush_interval -1
-        header_up Host {host}
-    }
-}
-
-opencode.lab.casava.space {
-    import harness_auth opencode
-    reverse_proxy harness-opencode:7681 {
-        flush_interval -1
-        header_up Host {host}
-    }
-}
-
-crush.lab.casava.space {
-    import harness_auth crush
-    reverse_proxy harness-crush:7681 {
-        flush_interval -1
-        header_up Host {host}
-    }
-}
-
-gptme.lab.casava.space {
-    import harness_auth gptme
-    reverse_proxy harness-gptme:7681 {
-        flush_interval -1
-        header_up Host {host}
-    }
-}
-
-goose.lab.casava.space {
-    import harness_auth goose
-    reverse_proxy harness-goose:7681 {
-        flush_interval -1
-        header_up Host {host}
-    }
-}
-
-plandex.lab.casava.space {
-    import harness_auth plandex
-    reverse_proxy harness-plandex:7681 {
-        flush_interval -1
-        header_up Host {host}
-    }
-}
-
-qwencode.lab.casava.space {
-    import harness_auth qwencode
-    reverse_proxy harness-qwencode:7681 {
-        flush_interval -1
-        header_up Host {host}
-    }
-}
-
-codex.lab.casava.space {
-    import harness_auth codex
-    reverse_proxy harness-codex:7681 {
-        flush_interval -1
-        header_up Host {host}
-    }
-}
-
-pi.lab.casava.space {
-    import harness_auth pi
-    reverse_proxy harness-pi:7681 {
-        flush_interval -1
-        header_up Host {host}
-    }
-}
-
-droid.lab.casava.space {
-    import harness_auth droid
-    reverse_proxy harness-droid:7681 {
-        flush_interval -1
-        header_up Host {host}
-    }
-}
-
-# ── OPTIONAL: multi-instance wildcard ─────────────────────────────────────────
-# Uncomment after:
-#   (a) adding `*.lab.casava.space  A  <VPS_IP>` to DNS, and
-#   (b) adding this to the GLOBAL { … } block at the top of the Caddyfile:
-#         on_demand_tls {
-#             ask http://harnesses-auth:8080/ask
-#         }
-#
-# Once enabled, `claude-blog.lab.casava.space` (or any `<harness>-<slug>` URL)
-# will create a fresh isolated container + volume on first visit.  Retention
-# sweep in the auth-service auto-cleans unpinned instances after RETENTION_DAYS.
-#
-# *.lab.casava.space {
-#     tls {
-#         on_demand
-#     }
-#     import harness_auth {labels.3}
-#     reverse_proxy harness-{labels.3}:7681 {
-#         flush_interval -1
-#         header_up Host {host}
-#     }
-# }

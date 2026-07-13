@@ -45,7 +45,7 @@ RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "7"))
 # extra ports/tmux windows that one container can be asked to run at once.
 # 0 disables the cap.
 MAX_INSTANCES_PER_HARNESS = int(os.environ.get("MAX_INSTANCES_PER_HARNESS", "5"))
-BASE_DOMAIN = os.environ.get("HARNESS_BASE_DOMAIN", "lab.casava.space")
+BASE_DOMAIN = os.environ.get("HARNESS_BASE_DOMAIN", "lab.example.com")
 COOKIE_NAME = "harness_session"
 CONTAINER_PREFIX = "harness-"
 HARNESS_PORT = 7681  # ttyd default for every harness's base "main" session
@@ -354,7 +354,7 @@ def issue(request: Request, token: str = Query(...)) -> Response:
     _decode(token, subdomain, harness_type)
 
     resp = RedirectResponse(url="/", status_code=302)
-    # domain=lab.casava.space (no leading dot — RFC 6265 spec; browsers extend
+    # domain=lab.example.com (no leading dot — RFC 6265 spec; browsers extend
     # to subdomains automatically) → one cookie unlocks every <name>.lab.…
     resp.set_cookie(
         key=COOKIE_NAME,

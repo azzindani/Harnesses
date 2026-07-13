@@ -90,7 +90,7 @@ services:
       IDLE_TIMEOUT_MIN: ${IDLE_TIMEOUT_MIN:-30}
       RETENTION_DAYS: ${RETENTION_DAYS:-7}
       MAX_INSTANCES_PER_HARNESS: ${MAX_INSTANCES_PER_HARNESS:-5}
-      HARNESS_BASE_DOMAIN: ${HARNESS_BASE_DOMAIN:-lab.casava.space}
+      HARNESS_BASE_DOMAIN: ${HARNESS_BASE_DOMAIN:-lab.example.com}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Bind-mount .env so the auth service can auto-fill empty TOKEN_*= lines
