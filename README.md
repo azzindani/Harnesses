@@ -1,5 +1,11 @@
 # Harnesses — Multi-Agent Coding Lab
 
+[![CI](https://github.com/azzindani/Harnesses/actions/workflows/ci.yml/badge.svg)](https://github.com/azzindani/Harnesses/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Status: experimental](https://img.shields.io/badge/status-v0.1.0%20%E2%80%94%20experimental-orange.svg)](CHANGELOG.md)
+
+> **Status:** `v0.1.0` — experimental / example project, actively evolving. Expect breaking changes between `0.x` releases; see [`CHANGELOG.md`](CHANGELOG.md).
+
 A personal lab for running and comparing multiple AI coding CLI agents ("harnesses") side by side — Claude Code, Aider, OpenCode, Crush, gptme, Goose, Plandex, Qwen Code, Codex CLI, Pi, and Droid — all backed by the same model provider, each reachable from a browser terminal on its own subdomain, with containers that sleep when idle and wake on first request.
 
 > Every domain shown below is a placeholder (`lab.example.com`). Replace it with your own.
@@ -197,6 +203,9 @@ docker compose up -d --force-recreate harness-<name>
 .
 ├── .env.example              # documented provider + auth config, no secrets
 ├── docker-compose.yml         # every service; harness-* gated behind the on-demand profile
+├── LICENSE                    # Apache-2.0
+├── CHANGELOG.md               # notable changes per release
+├── CONTRIBUTING.md            # how to send a PR
 ├── auth/
 │   ├── server.py              # JWT gate, container lifecycle, free-model proxy
 │   └── Dockerfile
