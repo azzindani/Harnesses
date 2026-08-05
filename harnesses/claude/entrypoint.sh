@@ -69,6 +69,50 @@ if [ -n "$WEB_MCP_URL" ]; then
     fi
 fi
 
+# ── Register the 6 self-hosted MCP_* tool servers ──────────────────────────
+# Same pattern as folio/web above. Single-endpoint repos (math/browser/
+# filesystem) register directly; the sub-mounted repos (ml/data/office) have
+# no single unified endpoint, so each sub-server under <BASE>/<name>/mcp is
+# registered as its own named server ("ml-basic", "data-workspace", etc).
+_mcp_register() {  # name url token(optional)
+    name="$1"; url="$2"; token="$3"
+    claude mcp remove --scope user "$name" >/dev/null 2>&1 || true
+    if [ -n "$token" ]; then
+        if claude mcp add --scope user --transport http "$name" "$url" \
+            --header "Authorization: Bearer $token" >/dev/null 2>&1; then
+            echo "MCP: registered '$name' -> $url"
+        else
+            echo "MCP: WARNING failed to register '$name'"
+        fi
+    else
+        if claude mcp add --scope user --transport http "$name" "$url" >/dev/null 2>&1; then
+            echo "MCP: registered '$name' -> $url"
+        else
+            echo "MCP: WARNING failed to register '$name'"
+        fi
+    fi
+}
+
+[ -n "$MATH_MCP_URL" ] && [ -n "$MATH_MCP_TOKEN" ] && _mcp_register math "$MATH_MCP_URL" "$MATH_MCP_TOKEN"
+[ -n "$BROWSER_MCP_URL" ] && [ -n "$BROWSER_MCP_TOKEN" ] && _mcp_register browser "$BROWSER_MCP_URL" "$BROWSER_MCP_TOKEN"
+[ -n "$FS_MCP_URL" ] && [ -n "$FS_MCP_TOKEN" ] && _mcp_register filesystem "$FS_MCP_URL" "$FS_MCP_TOKEN"
+
+if [ -n "$ML_MCP_BASE_URL" ] && [ -n "$ML_MCP_TOKEN" ]; then
+    for t in basic medium advanced; do
+        _mcp_register "ml-$t" "$ML_MCP_BASE_URL/$t/mcp" "$ML_MCP_TOKEN"
+    done
+fi
+if [ -n "$DATA_MCP_BASE_URL" ] && [ -n "$DATA_MCP_TOKEN" ]; then
+    for s in basic medium statistics transform visual workspace ingest; do
+        _mcp_register "data-$s" "$DATA_MCP_BASE_URL/$s/mcp" "$DATA_MCP_TOKEN"
+    done
+fi
+if [ -n "$OFFICE_MCP_BASE_URL" ] && [ -n "$OFFICE_MCP_TOKEN" ]; then
+    for s in docx-basic docx-tables docx-layout docx-new xlsx-basic xlsx-formulas xlsx-charts xlsx-new pptx-basic pptx-design pptx-new; do
+        _mcp_register "office-$s" "$OFFICE_MCP_BASE_URL/$s/mcp" "$OFFICE_MCP_TOKEN"
+    done
+fi
+
 # Pre-accept the first-run dialogs (onboarding, "trust this folder", and the
 # Bypass Permissions warning) so a freshly-recreated container drops straight
 # into the session instead of stopping on interactive prompts.  ~/.claude.json

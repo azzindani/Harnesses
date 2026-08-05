@@ -8,6 +8,8 @@ mkdir -p /root/.config/opencode
 # MCP env vars (from compose env_file: .env):
 #   FOLIO_MCP_URL / FOLIO_MCP_TOKEN -> "folio" (auth header, only if BOTH set)
 #   WEB_MCP_URL                     -> "web"   (no auth, only if set)
+#   MATH/BROWSER/FS_MCP_URL+TOKEN   -> "math"/"browser"/"filesystem"
+#   ML/DATA/OFFICE_MCP_BASE_URL+TOKEN -> "<repo>-<sub-server>" per sub-server
 python3 - <<'PY'
 import json, os
 
@@ -49,6 +51,42 @@ if web_url:
         "url": web_url,
         "enabled": True,
     }
+
+# The 6 self-hosted MCP_* tool servers. Single-endpoint repos register
+# directly; ml/data/office mount several sub-servers with no unified
+# endpoint, so each is registered individually as "<repo>-<sub-server>".
+def _remote(url, token=None):
+    entry = {"type": "remote", "url": url, "enabled": True}
+    if token:
+        entry["headers"] = {"Authorization": "Bearer " + token}
+    return entry
+
+_single = [
+    ("math", "MATH_MCP_URL", "MATH_MCP_TOKEN"),
+    ("browser", "BROWSER_MCP_URL", "BROWSER_MCP_TOKEN"),
+    ("filesystem", "FS_MCP_URL", "FS_MCP_TOKEN"),
+]
+for name, url_var, token_var in _single:
+    url = os.environ.get(url_var, "").strip()
+    token = os.environ.get(token_var, "").strip()
+    if url and token:
+        mcp[name] = _remote(url, token)
+
+_multi = [
+    ("ml", "ML_MCP_BASE_URL", "ML_MCP_TOKEN", ["basic", "medium", "advanced"]),
+    ("data", "DATA_MCP_BASE_URL", "DATA_MCP_TOKEN",
+     ["basic", "medium", "statistics", "transform", "visual", "workspace", "ingest"]),
+    ("office", "OFFICE_MCP_BASE_URL", "OFFICE_MCP_TOKEN",
+     ["docx-basic", "docx-tables", "docx-layout", "docx-new",
+      "xlsx-basic", "xlsx-formulas", "xlsx-charts", "xlsx-new",
+      "pptx-basic", "pptx-design", "pptx-new"]),
+]
+for prefix, base_var, token_var, subs in _multi:
+    base = os.environ.get(base_var, "").strip()
+    token = os.environ.get(token_var, "").strip()
+    if base and token:
+        for sub in subs:
+            mcp[prefix + "-" + sub] = _remote(base + "/" + sub + "/mcp", token)
 
 if mcp:
     config["mcp"] = mcp
