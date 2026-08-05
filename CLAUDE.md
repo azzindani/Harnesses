@@ -77,7 +77,16 @@ project/, data/, history/  # gitignored (except .gitkeep) — real working data,
 
 ## Environment variables
 
-Full documented list lives in `.env.example` — don't let it drift from what `docker-compose.yml` actually reads. Highlights: `HARNESS_BASE_DOMAIN`, `JWT_SECRET`, `IDLE_TIMEOUT_MIN`, `RETENTION_DAYS`, `MAX_INSTANCES_PER_HARNESS`, `TOKEN_<NAME>` (auto-filled by `auth` if blank), `FREE_FALLBACK` / `FREE_REQUIRE_TOOLS`, `FOLIO_MCP_URL` / `FOLIO_MCP_TOKEN`, `WEB_MCP_URL`.
+Full documented list lives in `.env.example` — don't let it drift from what `docker-compose.yml` actually reads. Highlights: `HARNESS_BASE_DOMAIN`, `JWT_SECRET`, `IDLE_TIMEOUT_MIN`, `RETENTION_DAYS`, `MAX_INSTANCES_PER_HARNESS`, `TOKEN_<NAME>` (auto-filled by `auth` if blank), `FREE_FALLBACK` / `FREE_REQUIRE_TOOLS`, `FOLIO_MCP_URL` / `FOLIO_MCP_TOKEN`, `WEB_MCP_URL`, and the 6 self-hosted `MCP_*` tool servers: `MATH_MCP_URL`/`_TOKEN`, `BROWSER_MCP_URL`/`_TOKEN`, `FS_MCP_URL`/`_TOKEN`, `ML_MCP_BASE_URL`/`_TOKEN`, `DATA_MCP_BASE_URL`/`_TOKEN`, `OFFICE_MCP_BASE_URL`/`_TOKEN`.
+
+## MCP server registration pattern
+
+Every MCP-capable harness (`claude`, `opencode`, `crush`, `qwencode`, `codex`, `droid`, `goose`, `gptme` — not `aider`/`plandex`/`pi`, which don't support MCP) registers the same set of remote servers in its own native config format, re-seeded from env vars on every boot (see §"Config is not history" below). The pattern is identical across all 8 entrypoints:
+
+- **Single-endpoint repos** (`folio`, `web`, `math`, `browser`, `filesystem`) register directly from a `..._URL` (+ optional `..._TOKEN` for bearer auth) — only if the required var(s) are non-empty.
+- **Sub-mounted repos** (`ml`, `data`, `office`) have no single unified endpoint — `MCP_Machine_Learning`, `MCP_Data_Analyst`, and `MCP_Microsoft_Office` each mount several sub-servers at `<BASE_URL>/<sub-server>/mcp`. Their harness var is the BASE url (no `/mcp` suffix); each entrypoint loops over the known sub-server names and registers every one individually as `<repo>-<sub-server>` (e.g. `ml-basic`, `data-workspace`, `office-pptx-design`).
+- Adding a 7th self-hosted repo (or a new sub-server to an existing one): add its `..._URL`/`..._TOKEN` pair to `.env.example` + `.env`, then extend the registration block in all 8 `harnesses/<name>/entrypoint.sh` files — there is no single shared helper, each harness's native config format needs its own block, so keep them all in sync by hand.
+- This is a lot of tools per harness by design (up to 26 servers / ~225 tools when every repo is configured) — small/free local models may struggle with tool-call reliability at that scale (see the troubleshooting table). Leaving a repo's `..._TOKEN` blank fully disables its registrations with no other changes needed.
 
 ## Gotchas for anyone (agent or human) working in this repo
 

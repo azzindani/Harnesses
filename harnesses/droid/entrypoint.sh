@@ -71,6 +71,38 @@ if web_url:
         "disabled": False,
     }
 
+# The 6 self-hosted MCP_* tool servers. Single-endpoint repos register
+# directly; ml/data/office mount several sub-servers with no unified
+# endpoint, so each is registered individually as "<repo>-<sub-server>".
+_single = [
+    ("math", "MATH_MCP_URL", "MATH_MCP_TOKEN"),
+    ("browser", "BROWSER_MCP_URL", "BROWSER_MCP_TOKEN"),
+    ("filesystem", "FS_MCP_URL", "FS_MCP_TOKEN"),
+]
+for name, url_var, token_var in _single:
+    url = os.environ.get(url_var, "").strip()
+    token = os.environ.get(token_var, "").strip()
+    if url and token:
+        servers[name] = {"type": "http", "url": url,
+                          "headers": {"Authorization": "Bearer " + token}, "disabled": False}
+
+_multi = [
+    ("ml", "ML_MCP_BASE_URL", "ML_MCP_TOKEN", ["basic", "medium", "advanced"]),
+    ("data", "DATA_MCP_BASE_URL", "DATA_MCP_TOKEN",
+     ["basic", "medium", "statistics", "transform", "visual", "workspace", "ingest"]),
+    ("office", "OFFICE_MCP_BASE_URL", "OFFICE_MCP_TOKEN",
+     ["docx-basic", "docx-tables", "docx-layout", "docx-new",
+      "xlsx-basic", "xlsx-formulas", "xlsx-charts", "xlsx-new",
+      "pptx-basic", "pptx-design", "pptx-new"]),
+]
+for prefix, base_var, token_var, subs in _multi:
+    base = os.environ.get(base_var, "").strip()
+    token = os.environ.get(token_var, "").strip()
+    if base and token:
+        for sub in subs:
+            servers[prefix + "-" + sub] = {"type": "http", "url": base + "/" + sub + "/mcp",
+                                            "headers": {"Authorization": "Bearer " + token}, "disabled": False}
+
 path = "/root/.factory/mcp.json"
 with open(path, "w") as f:
     json.dump({"mcpServers": servers}, f, indent=2)

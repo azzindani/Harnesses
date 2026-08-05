@@ -51,6 +51,34 @@ if [ -n "${WEB_MCP_URL}" ]; then
   qwen mcp add web "${WEB_MCP_URL}" -t http >/dev/null 2>&1 || true
 fi
 
+# The 6 self-hosted MCP_* tool servers. Single-endpoint repos register
+# directly; ml/data/office mount several sub-servers with no unified
+# endpoint, so each is registered individually as "<repo>-<sub-server>".
+if [ -n "${MATH_MCP_URL}" ] && [ -n "${MATH_MCP_TOKEN}" ]; then
+  qwen mcp add math "${MATH_MCP_URL}" -t http -H "Authorization: Bearer ${MATH_MCP_TOKEN}" >/dev/null 2>&1 || true
+fi
+if [ -n "${BROWSER_MCP_URL}" ] && [ -n "${BROWSER_MCP_TOKEN}" ]; then
+  qwen mcp add browser "${BROWSER_MCP_URL}" -t http -H "Authorization: Bearer ${BROWSER_MCP_TOKEN}" >/dev/null 2>&1 || true
+fi
+if [ -n "${FS_MCP_URL}" ] && [ -n "${FS_MCP_TOKEN}" ]; then
+  qwen mcp add filesystem "${FS_MCP_URL}" -t http -H "Authorization: Bearer ${FS_MCP_TOKEN}" >/dev/null 2>&1 || true
+fi
+if [ -n "${ML_MCP_BASE_URL}" ] && [ -n "${ML_MCP_TOKEN}" ]; then
+  for t in basic medium advanced; do
+    qwen mcp add "ml-$t" "${ML_MCP_BASE_URL}/$t/mcp" -t http -H "Authorization: Bearer ${ML_MCP_TOKEN}" >/dev/null 2>&1 || true
+  done
+fi
+if [ -n "${DATA_MCP_BASE_URL}" ] && [ -n "${DATA_MCP_TOKEN}" ]; then
+  for s in basic medium statistics transform visual workspace ingest; do
+    qwen mcp add "data-$s" "${DATA_MCP_BASE_URL}/$s/mcp" -t http -H "Authorization: Bearer ${DATA_MCP_TOKEN}" >/dev/null 2>&1 || true
+  done
+fi
+if [ -n "${OFFICE_MCP_BASE_URL}" ] && [ -n "${OFFICE_MCP_TOKEN}" ]; then
+  for s in docx-basic docx-tables docx-layout docx-new xlsx-basic xlsx-formulas xlsx-charts xlsx-new pptx-basic pptx-design pptx-new; do
+    qwen mcp add "office-$s" "${OFFICE_MCP_BASE_URL}/$s/mcp" -t http -H "Authorization: Bearer ${OFFICE_MCP_TOKEN}" >/dev/null 2>&1 || true
+  done
+fi
+
 tmux new-session -d -s main -c /workspace
 tmux send-keys -t main "qwen -m ${MODEL_NAME}" Enter
 exec ttyd --port 7681 --writable --check-origin=false -t fontSize=18 -t scrollback=10000 -t 'fontFamily="JetBrains Mono, Menlo, Consolas, monospace"' tmux attach-session -t main

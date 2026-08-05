@@ -72,7 +72,7 @@ Always-on: the shared Caddy router + `harnesses-auth`. Everything else (the 11 h
 
 > Only Claude Code and OpenCode are actively run day to day; the other 9 harness containers are stopped (not removed from `docker-compose.yml`) to save RAM/storage. Any of them comes back with `docker compose --profile on-demand up -d harness-<name>` — their images rebuild from the committed Dockerfiles and their history (see below) was never deleted.
 
-Every harness that supports MCP registers two optional servers the same way: **Folio** (remote HTTP MCP, bearer auth) and **web search/fetch** (a bundled DuckDuckGo sidecar, no key needed).
+Every harness that supports MCP (all but Aider, Plandex, Pi) registers optional remote servers the same env-var-gated way: **Folio** and **web search/fetch** (bundled DuckDuckGo sidecar, no key), plus the 6 self-hosted `azzindani/MCP_*` tool servers — **Math**, **Browser** (real browser automation, not the DuckDuckGo sidecar), **File_System**, **Machine_Learning**, **Data_Analyst**, and **Microsoft_Office**. The latter three mount several sub-servers each with no single unified endpoint, so every sub-server is registered individually (`ml-basic`, `data-workspace`, `office-pptx-design`, etc.) — up to 26 MCP server connections and ~225 extra tools when all are configured. Each pair of `..._URL`/`..._TOKEN` vars is independent — leave any blank to skip that repo.
 
 ## Quick start
 
@@ -157,6 +157,12 @@ See `.env.example` for the full, commented list. Highlights beyond the provider 
 | `FREE_FALLBACK` / `FREE_REQUIRE_TOOLS` | OpenRouter free-model catalog/fallback behavior |
 | `FOLIO_MCP_URL` / `FOLIO_MCP_TOKEN` | optional external Folio MCP server |
 | `WEB_MCP_URL` | the bundled web-search MCP sidecar (on by default, no key) |
+| `MATH_MCP_URL` / `..._TOKEN` | optional MCP_Math server |
+| `BROWSER_MCP_URL` / `..._TOKEN` | optional MCP_Web_Browser server (real browser automation, distinct from the `web` DuckDuckGo sidecar) |
+| `FS_MCP_URL` / `..._TOKEN` | optional MCP_File_System server |
+| `ML_MCP_BASE_URL` / `..._TOKEN` | optional MCP_Machine_Learning server — 3 sub-servers registered as `ml-basic`/`ml-medium`/`ml-advanced` |
+| `DATA_MCP_BASE_URL` / `..._TOKEN` | optional MCP_Data_Analyst server — 7 sub-servers registered as `data-<name>` |
+| `OFFICE_MCP_BASE_URL` / `..._TOKEN` | optional MCP_Microsoft_Office server — 11 sub-servers registered as `office-<name>` |
 
 `.env` is gitignored — never commit it. Commit changes to `.env.example` (placeholders only) instead.
 
