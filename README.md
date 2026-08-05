@@ -110,7 +110,7 @@ Every harness that supports MCP registers two optional servers the same way: **F
    ```
    Harness containers under the `on-demand` profile start automatically on first authenticated request — you don't `docker compose up` them yourself.
 
-6. **Log in:** visit `https://claude.lab.example.com/?token=<TOKEN_CLAUDE>` (or any harness). First visit sets a 30-day cookie scoped to the whole base domain, so logging in once on any subdomain unlocks every other harness too.
+6. **Log in:** visit `https://claude.lab.example.com/?token=<TOKEN_CLAUDE>` (or any harness). First visit sets a 360-day cookie scoped to the whole base domain, so logging in once on any subdomain unlocks every other harness too.
 
 ## Multiple simultaneous sessions per harness
 
