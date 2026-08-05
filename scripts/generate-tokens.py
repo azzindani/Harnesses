@@ -43,7 +43,7 @@ def env_key(harness: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--days", type=int, default=30, help="JWT lifetime (default 30)")
+    parser.add_argument("--days", type=int, default=360, help="JWT lifetime (default 360)")
     parser.add_argument(
         "--only",
         nargs="*",

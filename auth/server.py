@@ -50,7 +50,7 @@ COOKIE_NAME = "harness_session"
 CONTAINER_PREFIX = "harness-"
 HARNESS_PORT = 7681  # ttyd default for every harness's base "main" session
 COLD_START_TIMEOUT_S = 30
-TOKEN_TTL_DAYS = 30
+TOKEN_TTL_DAYS = 360
 
 # Mirrored from scripts/generate-tokens.py so the auth service can self-issue
 # tokens at startup (avoids running the script as a separate step).
@@ -359,7 +359,7 @@ def issue(request: Request, token: str = Query(...)) -> Response:
     resp.set_cookie(
         key=COOKIE_NAME,
         value=token,
-        max_age=30 * 86400,
+        max_age=TOKEN_TTL_DAYS * 86400,
         httponly=True,
         secure=True,
         samesite="lax",
