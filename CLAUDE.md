@@ -40,6 +40,7 @@ Shared Caddy reverse proxy (external to this repo — see caddy-snippet.txt)
 - **The reverse proxy is external to this repo.** A shared Caddy instance (this user's lives at `/root/caddy-router`, fronting other unrelated projects too) terminates TLS and routes subdomains in. `caddy-snippet.txt` is the block to append to it — this repo does not run Caddy itself.
 - **Multiple simultaneous sessions per harness are live**, not a future feature: `https://<harness>-<slug>.<domain>/?token=<jwt>` opens an extra tmux window + ttyd process inside that harness's one existing container/`/workspace` (up to `MAX_INSTANCES_PER_HARNESS`, default 5). It is deliberately not a separate container or volume per slug.
 - **Session history is one bind-mounted tree**, `./history/<harness>/`, not per-harness Docker volumes. `tar czf backup.tar.gz history/` backs up everything; `rm -rf history/` is the only thing that destroys it.
+- **`harness-files` is a 12th `harness-*` container that isn't a CLI harness** — it's `dufs` (a small file-server), always-on rather than on-demand, giving read-write web access to `project/`, `data/`, and `history/` at `files.<domain>` through the *same* JWT/cookie auth as everything else. It's recognized in `auth/server.py` via `UTILITY_SERVICES`, kept deliberately out of `HARNESSES`/`MULTI_INSTANCE_HARNESSES` so idle-sweep and dynamic-slug logic (which assume ttyd/tmux) leave it alone. See "File management" in `README.md`.
 
 ## Harnesses
 
@@ -63,7 +64,7 @@ Only Claude Code and OpenCode run day to day; the rest are stopped (not removed)
 
 ```
 .env.example              # every provider block + all tunables, no secrets — keep in sync with docker-compose.yml
-docker-compose.yml        # harness-* services gated behind the `on-demand` profile; harness-base built first
+docker-compose.yml        # the 11 CLI harness-* gated behind the `on-demand` profile (harness-base built first); harness-files is always-on
 Makefile                  # tokens, build, up/down, router-reload (targets the external Caddy), validate
 auth/server.py            # JWT gate + container lifecycle + free-model proxy — the one always-on brain
 scripts/generate-tokens.py

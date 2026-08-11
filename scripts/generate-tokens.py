@@ -34,6 +34,10 @@ HARNESSES = [
     "codex",
     "pi",
     "droid",
+    # Not a CLI harness — the always-on dufs file-manager web UI (see
+    # UTILITY_SERVICES in auth/server.py) — but it shares the same
+    # per-name JWT scheme, so it gets a token minted here too.
+    "files",
 ]
 
 

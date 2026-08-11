@@ -150,6 +150,33 @@ services:
         condition: service_healthy
     command: ["/bin/sh", "-c", "/scripts/wait-for-it.sh plandex-postgres:5432 -- ./plandex-server"]
 
+  # Web-based file manager for project/, data/, and history/ — reuses the
+  # exact same subdomain + JWT/cookie auth as every CLI harness below (see
+  # UTILITY_SERVICES in auth/server.py: /verify treats "files" as a normal
+  # single-instance harness type, just like "claude" or "aider"). Unlike
+  # those, it's always-on rather than on-demand: it's lightweight, and
+  # there's no per-visitor terminal state worth idle-stopping. dufs has no
+  # auth of its own unless `-a` is passed, which is safe here for the same
+  # reason ttyd itself has no login of its own — Caddy's forward_auth + JWT
+  # cookie already gates every request before it reaches this container.
+  # (Chose dufs over filebrowser/filebrowser after finding the latter
+  # announces its own archival on 2026-09-01, no further security fixes.)
+  harness-files:
+    image: sigoden/dufs:latest
+    container_name: harness-files
+    restart: unless-stopped
+    command:
+      - --bind=0.0.0.0
+      - --port=7681
+      - --allow-all
+      - /srv
+    volumes:
+      - ./project:/srv/project
+      - ./data:/srv/data
+      - ./history:/srv/history
+    networks:
+      - harnesses_net
+
   harness-claude:
     <<: *harness-defaults
     build: ./harnesses/claude

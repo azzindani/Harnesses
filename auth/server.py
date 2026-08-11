@@ -60,6 +60,16 @@ HARNESSES = [
 ]
 # Every harness is a ttyd clone, so all support on-demand per-slug sessions.
 MULTI_INSTANCE_HARNESSES = set(HARNESSES)
+
+# Single-instance, always-on utility services that reuse the same
+# harness-<name> container + subdomain/JWT auth machinery as the CLI
+# harnesses above (see _ensure_running — it's already generic enough to
+# need no special-casing) but aren't ttyd/tmux CLIs: no idle-sweep, no
+# dynamic multi-instance sessions. Kept out of HARNESSES/
+# MULTI_INSTANCE_HARNESSES so _harness_type_of and the idle sweep leave
+# them alone, exactly like `auth` and `web-mcp` themselves.
+UTILITY_SERVICES = ["files"]
+ALL_SUBDOMAINS = HARNESSES + UTILITY_SERVICES
 INSTANCE_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$")
 ENV_FILE = "/app/.env"  # bind-mounted from host docker-compose.yml
 INSTANCES_FILE = "/data/instances.json"  # persisted across auth-service restarts
@@ -149,7 +159,7 @@ def _parse_subdomain(subdomain: str) -> tuple[str, str | None]:
     `claude-blog`   → ("claude", "blog")   # dynamic instance to create/route
     `claude-9f3a2b` → ("claude", "9f3a2b") # auto-generated slug works the same
     """
-    if subdomain in HARNESSES:
+    if subdomain in ALL_SUBDOMAINS:
         return subdomain, None
     for harness in MULTI_INSTANCE_HARNESSES:
         prefix = harness + "-"
@@ -663,7 +673,7 @@ def _autofill_tokens_and_log_urls() -> None:
             if not m:
                 continue
             harness = m.group(2).lower()
-            if harness not in HARNESSES:
+            if harness not in ALL_SUBDOMAINS:
                 continue
             value = m.group(3).strip()
             if not value or not _token_valid(value, harness):
@@ -681,8 +691,9 @@ def _autofill_tokens_and_log_urls() -> None:
     else:
         log.warning("%s not present; logging URLs without persisting tokens", ENV_FILE)
 
-    # Make sure every harness has at least an in-memory token to log a URL for.
-    for h in HARNESSES:
+    # Make sure every harness/service has at least an in-memory token to log
+    # a URL for.
+    for h in ALL_SUBDOMAINS:
         tokens.setdefault(h, _sign_token(h))
 
     sep = "=" * 78
@@ -693,7 +704,7 @@ def _autofill_tokens_and_log_urls() -> None:
     log.info(sep)
     log.info("Base harnesses (always present, no auto-cleanup):")
     log.info(sep)
-    for h in HARNESSES:
+    for h in ALL_SUBDOMAINS:
         log.info("  https://%s.%s/?token=%s", h, BASE_DOMAIN, JWT_SECRET)
     log.info(sep)
     cap = f"max {MAX_INSTANCES_PER_HARNESS}/harness" if MAX_INSTANCES_PER_HARNESS > 0 else "uncapped"
