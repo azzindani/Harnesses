@@ -121,6 +121,12 @@ Visiting `https://<harness>-<slug>.lab.example.com/?token=<jwt>` (any existing t
 - `/pin` and `/unpin` (e.g. `https://claude-blog.lab.example.com/pin`) exempt a session from the `RETENTION_DAYS` auto-cleanup sweep.
 - Because every session of one harness type shares that one container, idle-stop is all-or-nothing: the container only stops once *every* session on it (base and every slug) has had no connected client for `IDLE_TIMEOUT_MIN`. A dynamic session's tmux window doesn't survive a container stop — it's recreated fresh the next time that slug is visited (the CLI's own conversation history, where a harness persists one, is unaffected — only the terminal window itself is momentarily gone).
 
+## File management
+
+`https://files.lab.example.com/?token=<TOKEN_FILES>` gives you a web-based file browser over `project/`, `data/`, and `history/` — read/write (browse, upload, download, delete, search, download-as-archive) — using the *exact same* subdomain + JWT/cookie auth as every CLI harness above, not a separate login. It's backed by [dufs](https://github.com/sigoden/dufs), a small always-on service rather than an on-demand one: it's lightweight and has no per-visitor terminal state worth idle-stopping, so (unlike the CLI harnesses) it doesn't sleep and there's no cold-start delay.
+
+Like `ttyd` itself, `dufs` has no login of its own here — Caddy's `forward_auth` already gates every request before it reaches the container, so anyone with a valid `harness_session` cookie (from logging into *any* subdomain with the master token) or a `files`-scoped token has full read-write access to all three directories. Treat it accordingly: it's exactly as sensitive as shell access to any other harness.
+
 ## Session history & storage
 
 Every harness that persists conversations writes into `./history/<harness>/` — one bind-mounted directory tree on the host, not a separate opaque Docker volume per harness. `docker-compose.yml` mounts the relevant subdirectory into each container at the path that harness expects (e.g. `./history/claude:/root/.claude`, `./history/codex:/root/.codex`, `./history/plandex/db:/var/lib/postgresql/data`). Practical implications:
@@ -208,7 +214,7 @@ docker compose up -d --force-recreate harness-<name>
 ```
 .
 ├── .env.example              # documented provider + auth config, no secrets
-├── docker-compose.yml         # every service; harness-* gated behind the on-demand profile
+├── docker-compose.yml         # every service; the 11 CLI harness-* gated behind the on-demand profile (harness-files is always-on)
 ├── LICENSE                    # Apache-2.0
 ├── CHANGELOG.md               # notable changes per release
 ├── CONTRIBUTING.md            # how to send a PR

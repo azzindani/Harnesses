@@ -7,6 +7,16 @@ and this project uses [Semantic Versioning](https://semver.org/) — while the
 major version is `0`, the public interface (env vars, compose service names,
 Caddy routes) may still change between minor releases.
 
+## [Unreleased]
+
+### Added
+
+- `harness-files`: a web-based file manager (`dufs`) at `files.<domain>`, giving read-write access to `project/`, `data/`, and `history/` through the same subdomain + JWT/cookie auth as every CLI harness. Always-on rather than on-demand. Considered `filebrowser/filebrowser` first but it announced its own archival (2026-09-01, no further security fixes) partway through integration, so switched to the actively-maintained `dufs` instead.
+
+### Changed
+
+- Token TTL widened from 30 to 360 days (`TOKEN_TTL_DAYS` in `auth/server.py`, `--days` default in `scripts/generate-tokens.py`) — 30 days was too easy to silently expire mid-use.
+
 ## [0.1.0] — 2026-07-13
 
 First tagged release. Everything below was built and run against a live
