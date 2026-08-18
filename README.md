@@ -37,7 +37,9 @@ Shared Caddy reverse proxy (external to this repo, owns TLS/ports 80+443)
   │
   └── forward_auth ──► harnesses-auth:/verify
         │                  │
-        │                  ├─ validates the JWT cookie
+        │                  ├─ validates the session cookie (or Bearer, or ?token=)
+        │                  ├─ re-mints it when it's near expiry, handed back as
+        │                  │  "X-Harness-Session" for Caddy to Set-Cookie
         │                  ├─ starts the target container if it's stopped
         │                  ├─ for a dynamic "<harness>-<slug>" hostname, docker-execs
         │                  │  an extra tmux+ttyd session into the SAME base container
@@ -52,7 +54,7 @@ Shared Caddy reverse proxy (external to this repo, owns TLS/ports 80+443)
                                           the actual CLI (claude / aider / opencode / …)
 ```
 
-Always-on: the shared Caddy router + `harnesses-auth`. Everything else (the 11 harness containers, `plandex-server`+`plandex-postgres`, `web-mcp`) starts on demand and stops after `IDLE_TIMEOUT_MIN` minutes of no connected client.
+Always-on: the shared Caddy router + `harnesses-auth`. Everything else (the 11 harness containers, `plandex-server`+`plandex-postgres`, `web-mcp`) starts on demand and stops after `IDLE_TIMEOUT_MIN` minutes of no connected client — the sleep takes the tmux session with it, but `claude` and `opencode` relaunch with `--continue`, so waking returns you to the conversation rather than a blank prompt.
 
 ## Harnesses
 
@@ -123,12 +125,12 @@ The token in the URL is your *credential*; the cookie the browser keeps is a sep
 
 If a session *does* get rejected, the auth service says so explicitly — `docker compose logs auth | grep "auth:"` prints one line per rejection with the host and reason, so "did it log me out, or did something else break?" is answerable rather than guesswork.
 
-Staying *connected* is a separate concern from staying logged in, and has two knobs:
+Staying *connected* is a separate concern from staying logged in — a harness sleeping under you is normal, and never costs you the session:
 
 - **Containers still sleep, and waking up resumes your conversation.** Stopping a container kills its tmux server, so the terminal *window* can't survive — but the conversation itself lives in `history/`, and `claude`/`opencode` relaunch their `main` session with `--continue`, so a visit after an idle-stop drops you back into the session you left rather than a blank one. Cold start is real (~60s for claude, which registers ~26 MCP servers before ttyd listens) — that's the price of getting the RAM back, and `COLD_START_TIMEOUT_S` covers it.
 - `IDLE_EXEMPT` — harness types the idle sweep must *never* stop, e.g. `IDLE_EXEMPT=claude,opencode`. Empty by default: an idle opencode holds ~1.1GB and a few percent of CPU, so sleeping is usually worth more than skipping a cold start. Use it only for a harness whose live terminal state you can't afford to lose (a long-running process in the pane, say — that a `--continue` can't bring back).
 - Dynamic `<harness>-<slug>` sessions deliberately do *not* get `--continue`: they share the one `/workspace`, so resuming would point every parallel slug at the same conversation. Reopen a past one from inside the CLI (`/resume` in Claude Code, the session picker in opencode).
-- The browser terminal reconnects itself. `ttyd` only auto-retries on an abnormal socket close, so the bundled terminal script also synthesizes the "press Enter to reconnect" keypress and, if the terminal is still stuck ~12 seconds later, reloads the page (max 3 reloads per 2 minutes) — which replays cookie → auth → container start → `tmux attach` and lands back in the same session. Backgrounded tabs are left alone until they're visible again.
+- **The browser terminal reconnects itself** when a sleep (or a phone backgrounding a tab, or a network blip) drops the socket — no reload, no re-login. Mechanics in [Copy/paste and scrolling in the browser terminal](#copypaste-and-scrolling-in-the-browser-terminal) below.
 
 ## Multiple simultaneous sessions per harness
 
@@ -143,7 +145,7 @@ Visiting `https://<harness>-<slug>.lab.example.com/?token=<jwt>` (any existing t
 
 `https://files.lab.example.com/?token=<TOKEN_FILES>` gives you a web-based file browser over `project/`, `data/`, and `history/` — read/write (browse, upload, download, delete, search, download-as-archive) — using the *exact same* subdomain + JWT/cookie auth as every CLI harness above, not a separate login. It's backed by [dufs](https://github.com/sigoden/dufs), a small always-on service rather than an on-demand one: it's lightweight and has no per-visitor terminal state worth idle-stopping, so (unlike the CLI harnesses) it doesn't sleep and there's no cold-start delay.
 
-Like `ttyd` itself, `dufs` has no login of its own here — Caddy's `forward_auth` already gates every request before it reaches the container, so anyone with a valid `harness_session` cookie (from logging into *any* subdomain with the master token) or a `files`-scoped token has full read-write access to all three directories. Treat it accordingly: it's exactly as sensitive as shell access to any other harness.
+Like `ttyd` itself, `dufs` has no login of its own here — Caddy's `forward_auth` already gates every request before it reaches the container, so anyone with a valid `harness_session` cookie or a `files`-scoped token has full read-write access to all three directories. Note what that means under the default `SESSION_SCOPE=all`: a session started from *any* token, on *any* subdomain, opens this too — handing someone a token for one harness hands them the file tree. Set `SESSION_SCOPE=harness` if you ever need that separation. Treat it accordingly: it's exactly as sensitive as shell access to any other harness.
 
 ## Session history & storage
 
@@ -166,6 +168,8 @@ Claude Code and OpenCode run in the terminal's alternate-screen buffer (like `vi
 
 On touch devices, a fixed bottom toolbar (Esc, Tab, Ctrl, Alt, Shift, Home, End, PgUp, PgDn, arrows — Termius/Termux-style) fills in keys a mobile on-screen keyboard doesn't have. Ctrl/Alt/Shift are one-shot sticky toggles: tap to arm, then the next keypress (physical or another toolbar tap) gets that modifier merged in and the toggle releases itself.
 
+The same file also keeps the terminal connected, which matters because a harness sleeping under you is a routine event, not an error. `ttyd` only auto-retries the websocket on an *abnormal* close; a clean one (what a backgrounded mobile tab typically gets) parks on a "Press ⏎ to Reconnect" overlay, so the script synthesizes that keypress. If the terminal is still stuck ~12 seconds later — the socket came back but the harness is cold-starting, say — it reloads the page once, which replays cookie → auth → container start → `tmux attach` and lands back in the same tmux session. Exactly once: the reload can legitimately take a minute while a container boots, and a second one would abort the very request doing the waking. Hidden tabs are left alone until they're visible again, and a hard cap of 3 reloads per 2 minutes means a genuinely dead backend can't put the tab in a loop.
+
 ## Environment variables
 
 See `.env.example` for the full, commented list. Highlights beyond the provider block:
@@ -177,7 +181,7 @@ See `.env.example` for the full, commented list. Highlights beyond the provider 
 | `SESSION_TTL_DAYS` / `SESSION_REFRESH_DAYS` | lifetime of the browser session minted at login, and how much of it must remain before it is slid forward |
 | `SESSION_SCOPE` | `all` (default) → one login covers every subdomain incl. `files`; `harness` → per-harness pinning |
 | `IDLE_TIMEOUT_MIN` | minutes of no connected client before a container is stopped (`0` disables) |
-| `IDLE_EXEMPT` | harness types the idle sweep never stops, e.g. `claude,opencode` — their tmux sessions then survive any amount of idleness |
+| `IDLE_EXEMPT` | harness types the idle sweep never stops, e.g. `claude,opencode` — empty by default, since waking now resumes the conversation anyway |
 | `COLD_START_TIMEOUT_S` | seconds `/verify` waits for a cold-starting harness before returning 504 (claude needs >60s to register its MCP servers) |
 | `RETENTION_DAYS` | days of inactivity before an unpinned dynamic session is torn down |
 | `MAX_INSTANCES_PER_HARNESS` | cap on concurrent dynamic sessions per harness type (`0` = unlimited) |
