@@ -154,7 +154,17 @@ fi
 export IS_SANDBOX=1
 
 tmux new-session -d -s main -c /workspace
-tmux send-keys -t main "claude --dangerously-skip-permissions" Enter
+# `--continue` resumes the most recent conversation for this cwd. That matters
+# because this entrypoint runs again every time the idle sweep has stopped the
+# container and a visit restarts it: without it, waking up drops you into a
+# blank session even though the transcript is sitting right there in
+# ./history/claude. The `||` fallback covers the first-ever boot (nothing to
+# continue yet), where `claude --continue` exits instead of starting.
+# Deliberately NOT applied to dynamic <harness>-<slug> sessions (see
+# HARNESS_LAUNCH_CMD in auth/server.py): they share this one /workspace, so
+# resuming would point every parallel slug at the SAME conversation.
+tmux send-keys -t main \
+    "claude --continue --dangerously-skip-permissions || claude --dangerously-skip-permissions" Enter
 
 # The Bypass Permissions warning can't be pre-accepted via config (the config
 # flags are ignored), so auto-confirm it once the dialog renders — this is a
