@@ -11,6 +11,11 @@ name: harnesses
 x-harness-defaults: &harness-defaults
   restart: "no"
   profiles: ["on-demand"]
+  # ttyd runs as PID 1 and never reaps, so every tmux session that ends leaves a
+  # <defunct> tmux server and shell behind — four of them accumulated over one
+  # afternoon of restarting a harness session. docker-init sits in front as PID 1
+  # and reaps them.
+  init: true
   env_file: .env
   volumes:
     - ./project:/workspace
