@@ -4,9 +4,31 @@ Two responsibilities:
 
   1. JWT-gate every harness subdomain.  Tokens are HS256-signed with the
      `harness` claim pinning a token to its subdomain (a `TOKEN_AIDER` cannot
-     be replayed against `crush.lab.…`).  First visit with `?token=<jwt>` sets
-     an `HttpOnly` cookie scoped to the harness host; subsequent requests use
-     the cookie via Caddy `forward_auth`.
+     be replayed against `crush.lab.…`).  First visit with `?token=<jwt>`
+     exchanges that token for a *session* token in an `HttpOnly` cookie scoped
+     to the whole base domain; subsequent requests use the cookie via Caddy
+     `forward_auth`.
+
+     Session model (ported from the Folio editor's, which is what actually
+     keeps a browser logged in for months):
+
+       • The presented `?token=` / `Authorization: Bearer` credential and the
+         SESSION are two different things.  Whatever you log in with, /issue
+         mints a *fresh* session JWT (`kind: "session"`) and stores THAT in the
+         cookie -- so the long-lived operator token (or, worse, the raw
+         JWT_SECRET) never has to live in the browser, and the session's clock
+         starts at login instead of at token-generation time.
+       • With SESSION_SCOPE=all (default) the session claims `harness: "*"`:
+         one login unlocks every subdomain under the base domain -- all 11
+         harnesses, every `<harness>-<slug>` session, and `files`.  Set
+         SESSION_SCOPE=harness to keep the old per-harness pinning.
+       • The session SLIDES: /verify re-mints it once less than
+         SESSION_REFRESH_DAYS of its life remain and hands the replacement
+         back to Caddy in the `X-Harness-Session` header (a complete
+         Set-Cookie value), which the harness_auth snippet copies onto the
+         response.  Active use therefore never lapses.  A cookie holding a
+         pre-session (legacy per-harness) token or the raw secret is upgraded
+         to a session token the same way, on its next request.
 
   2. Sablier-lite: on each `/verify` hit the service ensures the target
      harness container is running (cold-start ≈ 3-7s, blocking) and bumps a
@@ -49,8 +71,38 @@ BASE_DOMAIN = os.environ.get("HARNESS_BASE_DOMAIN", "lab.example.com")
 COOKIE_NAME = "harness_session"
 CONTAINER_PREFIX = "harness-"
 HARNESS_PORT = 7681  # ttyd default for every harness's base "main" session
-COLD_START_TIMEOUT_S = 30
+# How long /verify blocks waiting for a just-started harness to listen. Has to
+# cover the SLOWEST harness's boot, not the average one: claude's entrypoint
+# registers ~26 MCP servers before it execs ttyd, which alone takes over a
+# minute on this box. Too low and the first visit after an idle-stop 504s even
+# though the container is coming up fine.
+COLD_START_TIMEOUT_S = int(os.environ.get("COLD_START_TIMEOUT_S", "120"))
 TOKEN_TTL_DAYS = 360
+
+# ── Session model (see module docstring) ─────────────────────────────────────
+# Lifetime of the session token minted at login. Independent of TOKEN_TTL_DAYS
+# (the lifetime of the operator tokens written to .env): the session clock
+# starts when you log in, not when the token was generated.
+SESSION_TTL_DAYS = int(os.environ.get("SESSION_TTL_DAYS", str(TOKEN_TTL_DAYS)))
+# Slide the session once less than this much of its life remains. Bigger than
+# 0 and smaller than SESSION_TTL_DAYS -- a session in daily use is re-minted
+# roughly once per (TTL - REFRESH) days, so this is not a per-request cost.
+SESSION_REFRESH_DAYS = int(os.environ.get("SESSION_REFRESH_DAYS", "30"))
+# "all"     -> the session claims `harness: "*"`: one login covers every
+#              subdomain (all harnesses, every slug session, and files).
+# "harness" -> the session stays pinned to the harness type it was minted on,
+#              i.e. the pre-session behaviour (a login on claude.<domain> does
+#              not unlock files.<domain>).
+SESSION_SCOPE = os.environ.get("SESSION_SCOPE", "all").strip().lower()
+# Response header carrying a complete Set-Cookie value back through Caddy's
+# forward_auth (`copy_headers`) so a sliding refresh can reach the browser.
+SESSION_HEADER = "X-Harness-Session"
+# Harness types the idle sweep must never stop, e.g. "claude,opencode".
+# Stopping a container kills its tmux server, and with it every live CLI
+# session inside it -- exempt the harnesses you actually keep work in.
+IDLE_EXEMPT = {
+    h.strip().lower() for h in os.environ.get("IDLE_EXEMPT", "").split(",") if h.strip()
+}
 
 # Mirrored from scripts/generate-tokens.py so the auth service can self-issue
 # tokens at startup (avoids running the script as a separate step).
@@ -274,13 +326,123 @@ def _ensure_dynamic_session(container, harness_type: str, instance: str) -> int:
     return port
 
 
+def _presented_tokens(request: Request) -> list[str]:
+    """Every credential this request carries, best-first.
+
+    Ported from Folio's `presentedToken` (Bearer → ?token= → cookie), with one
+    change: we return ALL of them rather than only the first present one, and
+    the caller accepts the first that actually validates.  A browser sends the
+    cookie; a script/CLI hitting `files.<domain>` sends a Bearer header; the
+    first-visit link carries `?token=`.  Any of the three logs you in, and an
+    unrelated Authorization header can't shadow a perfectly good cookie.
+    """
+    out: list[str] = []
+    header = request.headers.get("authorization", "")
+    if header[:7].lower() == "bearer ":
+        out.append(header[7:].strip())
+    query = request.query_params.get("token")
+    if query:
+        out.append(query.strip())
+    cookie = request.cookies.get(COOKIE_NAME)
+    if cookie:
+        out.append(cookie.strip())
+    return [t for t in out if t]
+
+
+def _authenticate(request: Request, subdomain: str, harness_type: str) -> tuple[dict, str]:
+    """Validate whatever credential the request carries for this subdomain.
+
+    Returns (payload, token) for the first credential that validates; raises
+    the failure of the last one tried (401/403) when none do.  Every rejection
+    is logged: an operator debugging "it logged me out again" should be able to
+    tell from `docker logs harnesses-auth` whether auth was ever the reason.
+    """
+    tokens = _presented_tokens(request)
+    if not tokens:
+        log.info("auth: no credential presented for %s.%s", subdomain, BASE_DOMAIN)
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                f"No session cookie. Visit https://{subdomain}.{BASE_DOMAIN}/"
+                f"?token=<your-jwt> once to start a session."
+            ),
+        )
+    last: HTTPException | None = None
+    for token in tokens:
+        try:
+            return _decode(token, subdomain, harness_type), token
+        except HTTPException as e:
+            last = e
+    log.info("auth: rejected credential for %s.%s: %s",
+             subdomain, BASE_DOMAIN, last.detail if last else "unknown")
+    raise last if last else HTTPException(401, "no valid credential")
+
+
+def _session_claim(harness_type: str) -> str:
+    """`harness` claim a newly-minted session carries (see SESSION_SCOPE)."""
+    return "*" if SESSION_SCOPE == "all" else harness_type
+
+
+def _mint_session(harness_type: str) -> str:
+    """A fresh durable session JWT — the browser's "logged in" credential.
+
+    Deliberately NOT the token the caller presented: minting our own means the
+    session's expiry starts now (so it can slide), it is marked `kind:
+    "session"`, and the operator's long-lived token / the raw JWT_SECRET never
+    has to sit in a cookie.  Mirrors Folio's `mintSessionToken`.
+    """
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "harness": _session_claim(harness_type),
+            "kind": "session",
+            "iat": now,
+            "exp": now + SESSION_TTL_DAYS * 86400,
+        },
+        JWT_SECRET,
+        algorithm=JWT_ALG,
+    )
+
+
+def _session_cookie_value(token: str) -> str:
+    """The complete Set-Cookie value for a session token.
+
+    Domain-scoped with no leading dot (RFC 6265 — browsers extend it to
+    subdomains automatically), so one cookie covers every subdomain under the
+    base domain.  Kept in one place because it is emitted two ways: as the
+    Set-Cookie on /issue's redirect, and verbatim in the SESSION_HEADER that
+    Caddy copies onto the response for a sliding refresh.
+    """
+    return (
+        f"{COOKIE_NAME}={token}; Domain={BASE_DOMAIN}; Path=/; "
+        f"Max-Age={SESSION_TTL_DAYS * 86400}; HttpOnly; Secure; SameSite=Lax"
+    )
+
+
+def _needs_refresh(payload: dict) -> bool:
+    """True when the browser should be handed a freshly-minted session.
+
+    Two cases: (a) the cookie predates this session model (a per-harness
+    TOKEN_* or the raw JWT_SECRET) → upgrade it, which is also what widens it
+    to every subdomain under SESSION_SCOPE=all; (b) it IS a session token but
+    is within SESSION_REFRESH_DAYS of expiring → slide it.
+    """
+    if payload.get("kind") != "session":
+        return True
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return True  # sessions always carry an exp; anything else gets replaced
+    return (exp - time.time()) < SESSION_REFRESH_DAYS * 86400
+
+
 def _decode(token: str, subdomain: str, harness_type: str) -> dict:
     """Validate the JWT (or master JWT_SECRET) against the calling subdomain.
 
     Master JWT_SECRET → ok for everything (operator convenience).
     Signed JWTs → the `harness` claim must match the full subdomain
     (`claude-blog`), the harness type (`claude`, useful when the operator
-    issued a token before knowing the instance name), or the wildcard `*`.
+    issued a token before knowing the instance name), or the wildcard `*`
+    (what a SESSION_SCOPE=all session token carries).
     """
     if token == JWT_SECRET:
         return {"harness": "*", "master": True}
@@ -349,9 +511,10 @@ def issue(request: Request, token: str = Query(...)) -> Response:
     """Visited as `https://<subdomain>.<base>/?token=<jwt>` (Caddy rewrites here).
 
     Derives the subdomain from the Host header, parses out the harness type
-    and optional instance, validates the JWT, sets a *domain-scoped* cookie
-    (so one login covers every subdomain under .<BASE_DOMAIN>), then 302s
-    to `/` so the token leaves the URL bar.
+    and optional instance, validates the presented token, then EXCHANGES it
+    for a freshly-minted session token in a *domain-scoped* cookie (so one
+    login covers every subdomain under .<BASE_DOMAIN>, `files` included), and
+    302s to `/` so the token leaves the URL bar.
     """
     host = request.headers.get("host", "").split(":")[0]
     suffix = "." + BASE_DOMAIN
@@ -364,18 +527,13 @@ def issue(request: Request, token: str = Query(...)) -> Response:
     _decode(token, subdomain, harness_type)
 
     resp = RedirectResponse(url="/", status_code=302)
-    # domain=lab.example.com (no leading dot — RFC 6265 spec; browsers extend
-    # to subdomains automatically) → one cookie unlocks every <name>.lab.…
-    resp.set_cookie(
-        key=COOKIE_NAME,
-        value=token,
-        max_age=TOKEN_TTL_DAYS * 86400,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        path="/",
-        domain=BASE_DOMAIN,
-    )
+    # The cookie carries a session token, never the credential that was
+    # presented -- see _mint_session. domain=lab.example.com (no leading dot,
+    # RFC 6265; browsers extend it to subdomains automatically) → one cookie
+    # unlocks every <name>.lab.… host.
+    resp.headers.append("set-cookie", _session_cookie_value(_mint_session(harness_type)))
+    log.info("issue: session started on %s.%s (scope=%s, %dd)",
+             subdomain, BASE_DOMAIN, _session_claim(harness_type), SESSION_TTL_DAYS)
     return resp
 
 
@@ -393,15 +551,17 @@ def verify(request: Request, harness: str = Query(...)) -> Response:
     harness type share a single container on different ports, so Caddy can't
     derive the target from the hostname alone anymore).
     """
-    token = request.cookies.get(COOKIE_NAME)
-    if not token:
-        return HTMLResponse(
-            f"<h1>401</h1><p>No session cookie. Visit "
-            f"<code>https://{harness}.{BASE_DOMAIN}/?token=&lt;your-jwt&gt;</code> first.</p>",
-            status_code=401,
-        )
     harness_type, instance = _parse_subdomain(harness)
-    _decode(token, harness, harness_type)
+    try:
+        payload, _token = _authenticate(request, harness, harness_type)
+    except HTTPException as e:
+        if e.status_code == 401:
+            return HTMLResponse(
+                f"<h1>401</h1><p>No session cookie. Visit "
+                f"<code>https://{harness}.{BASE_DOMAIN}/?token=&lt;your-jwt&gt;</code> first.</p>",
+                status_code=401,
+            )
+        raise
     container_name, port = _ensure_running(harness_type, instance)
 
     last_seen[container_name] = time.monotonic()
@@ -410,10 +570,17 @@ def verify(request: Request, harness: str = Query(...)) -> Response:
         if key in instances:
             instances[key]["last_seen_ts"] = time.time()
             _instances_save()
-    return Response(
-        status_code=200,
-        headers={"X-Harness-Upstream": f"{container_name}:{port}"},
-    )
+    headers = {"X-Harness-Upstream": f"{container_name}:{port}"}
+    # Sliding session: hand Caddy a replacement cookie when this one is close
+    # to expiring (or predates the session model). The harness_auth snippet
+    # copies SESSION_HEADER onto the response as Set-Cookie -- if the snippet
+    # hasn't been updated yet, the header is simply ignored and the old
+    # cookie keeps working until it expires on its own.
+    if _needs_refresh(payload):
+        headers[SESSION_HEADER] = _session_cookie_value(_mint_session(harness_type))
+        log.info("session: refreshed cookie for %s.%s (scope=%s, %dd)",
+                 harness, BASE_DOMAIN, _session_claim(harness_type), SESSION_TTL_DAYS)
+    return Response(status_code=200, headers=headers)
 
 
 @app.get("/ask")
@@ -453,11 +620,8 @@ def _set_pin(request: Request, pinned: bool) -> Response:
     if not host.endswith(suffix):
         raise HTTPException(400, "host mismatch")
     subdomain = host[: -len(suffix)]
-    token = request.cookies.get(COOKIE_NAME)
-    if not token:
-        raise HTTPException(401, "no session cookie")
     harness_type, instance = _parse_subdomain(subdomain)
-    _decode(token, subdomain, harness_type)
+    _authenticate(request, subdomain, harness_type)
     if instance is None:
         return HTMLResponse(
             f"<h1>n/a</h1><p>{subdomain} is the base harness, not a session — "
@@ -541,6 +705,8 @@ async def _idle_sweep() -> None:
     if IDLE_TIMEOUT_MIN <= 0:
         log.info("idle sweep disabled (IDLE_TIMEOUT_MIN=0)")
         return
+    if IDLE_EXEMPT:
+        log.info("idle sweep: never stopping %s (IDLE_EXEMPT)", ", ".join(sorted(IDLE_EXEMPT)))
     timeout_s = IDLE_TIMEOUT_MIN * 60
     while True:
         await asyncio.sleep(60)
@@ -558,6 +724,11 @@ async def _idle_sweep() -> None:
             if htype is None:
                 continue  # not a managed harness container
             alive.add(name)
+            if htype in IDLE_EXEMPT:
+                # Never idle-stop this one: stopping the container kills its
+                # tmux server, and with it every CLI session running in it.
+                last_seen[name] = now
+                continue
             ports = [HARNESS_PORT] + list(_assigned_ports(htype).values())
             if _terminal_busy_any(container, ports):
                 last_seen[name] = now  # active visitor → keep alive
@@ -701,6 +872,12 @@ def _autofill_tokens_and_log_urls() -> None:
     log.info("Master login (JWT_SECRET works on every subdomain + every instance):")
     log.info(sep)
     log.info("  cookie domain is .%s — log in once on ANY subdomain, all unlocked", BASE_DOMAIN)
+    log.info("  session: %dd, scope=%s, slides when <%dd remain (never expires while in use)",
+             SESSION_TTL_DAYS,
+             "all subdomains" if SESSION_SCOPE == "all" else "per harness",
+             SESSION_REFRESH_DAYS)
+    log.info("  idle-stop exemptions: %s",
+             ", ".join(sorted(IDLE_EXEMPT)) if IDLE_EXEMPT else "(none — set IDLE_EXEMPT)")
     log.info(sep)
     log.info("Base harnesses (always present, no auto-cleanup):")
     log.info(sep)

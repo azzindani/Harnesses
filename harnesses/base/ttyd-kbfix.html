@@ -47,6 +47,20 @@
       overlay and waits for a real keypress. We detect that overlay and
       synthesize the Enter keypress so reconnecting after backgrounding/
       reopening the tab needs no manual action (not even a page reload).
+  10. Stuck-connection watchdog — the retry in #9 (and ttyd's own) is a SINGLE
+      attempt against a socket that may fail for a reason a keypress can't
+      fix: the harness container was idle-stopped and is cold-starting (the
+      auth service blocks 3-7s on /verify, and the WS attempt can lose that
+      race), the phone changed network, or the session cookie needed the
+      refresh that only a full document request can pick up. Whenever the
+      "Connection Closed" / "Reconnecting..." overlay stays up for more than
+      ~12 visible seconds, reload the page: that replays the whole flow
+      (cookie → forward_auth → container start → ttyd → `tmux attach`), which
+      always lands back in the SAME tmux session, whereas a stuck overlay
+      needs a manual reload anyway. Capped at 3 reloads per 2 minutes
+      (sessionStorage) so a genuinely dead backend can't put the tab in a
+      reload loop; hidden tabs never reload, and their clock only starts once
+      the tab is visible again.
 */
 (function () {
   function decodeUtf8(s) { try { return decodeURIComponent(escape(s)); } catch (e) { return s; } }
@@ -605,7 +619,65 @@
       });
       window.addEventListener('pageshow', tryAutoReconnect);
       window.addEventListener('focus', tryAutoReconnect);
+      window.addEventListener('online', tryAutoReconnect);
       installed.push('auto-reconnect');
+
+      /* 10. Stuck-connection watchdog -- see header comment. */
+      var RELOAD_KEY = 'lab-kbfix-reloads';
+      var STUCK_MS = 12000;
+      var stuckSince = 0;
+
+      /* ttyd's overlay is a child of term.element. "Connection Closed" and
+         "Reconnecting..." both mean no live socket; "Reconnected" (shown for
+         300ms on success) must NOT match, hence the exact strings.
+         ttyd's OverlayAddon reuses ONE node and fades it with opacity rather
+         than clearing its text, so also require it to be visible -- otherwise
+         a stale faded message would read as a permanent disconnect and put
+         the tab in a reload loop. */
+      function disconnectedOverlay() {
+        if (!term.element) return false;
+        var kids = term.element.children;
+        for (var i = 0; i < kids.length; i++) {
+          var el = kids[i];
+          var txt = el.textContent || '';
+          var hit = txt.indexOf('Connection Closed') !== -1 ||
+                    txt.indexOf('Reconnecting...') !== -1 ||
+                    (txt.indexOf('Press') !== -1 && txt.indexOf('Reconnect') !== -1);
+          if (!hit) continue;
+          try {
+            var st = window.getComputedStyle(el);
+            if (st.opacity === '0' || st.display === 'none' || st.visibility === 'hidden') continue;
+          } catch (e) {}
+          return true;
+        }
+        return false;
+      }
+
+      function reloadBudgetLeft() {
+        try {
+          var now = Date.now();
+          var hist = JSON.parse(sessionStorage.getItem(RELOAD_KEY) || '[]')
+            .filter(function (t) { return now - t < 120000; });
+          if (hist.length >= 3) return false;
+          hist.push(now);
+          sessionStorage.setItem(RELOAD_KEY, JSON.stringify(hist));
+          return true;
+        } catch (e) { return true; }  /* no sessionStorage → don't block the reload */
+      }
+
+      setInterval(function () {
+        /* A hidden tab is expected to be disconnected; don't reload it, and
+           don't let its time away count towards the stuck window either. */
+        if (document.hidden || !disconnectedOverlay()) { stuckSince = 0; return; }
+        if (!stuckSince) { stuckSince = Date.now(); return; }
+        if (Date.now() - stuckSince < STUCK_MS) return;
+        stuckSince = 0;
+        if (reloadBudgetLeft()) {
+          try { console.log('[lab-kbfix] terminal stuck disconnected — reloading'); } catch (_) {}
+          location.reload();
+        }
+      }, 1000);
+      installed.push('stuck-watchdog');
     } catch (e) {}
 
     try { console.log('[lab-kbfix] handlers: ' + installed.join(', ')); } catch (_) {}

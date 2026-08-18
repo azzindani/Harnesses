@@ -110,7 +110,23 @@ Every harness that supports MCP (all but Aider, Plandex, Pi) registers optional 
    ```
    Harness containers under the `on-demand` profile start automatically on first authenticated request — you don't `docker compose up` them yourself.
 
-6. **Log in:** visit `https://claude.lab.example.com/?token=<TOKEN_CLAUDE>` (or any harness). First visit sets a 360-day cookie scoped to the whole base domain, so logging in once on any subdomain unlocks every other harness too.
+6. **Log in:** visit `https://claude.lab.example.com/?token=<TOKEN_CLAUDE>` (or any harness). One login covers the whole lab — see below.
+
+## Sessions and staying logged in
+
+The token in the URL is your *credential*; the cookie the browser keeps is a separate, freshly-minted **session token**. Logging in on any subdomain exchanges one for the other, which is what makes a login durable:
+
+- **One login, every subdomain.** The session is minted with a wildcard claim (`SESSION_SCOPE=all`, the default), so a single login unlocks all 11 harnesses, every `<harness>-<slug>` session, and `files.<domain>` — no second login, no per-subdomain token. Set `SESSION_SCOPE=harness` to keep the older behaviour where a token only opens its own harness.
+- **It slides.** Every request re-checks the cookie's remaining life; once less than `SESSION_REFRESH_DAYS` (30) of its `SESSION_TTL_DAYS` (360) window remain, the auth service mints a replacement and Caddy sets it on the response. A session you actually use therefore never expires. (A cookie predating this model — a raw `TOKEN_*` or the master secret — is upgraded to a session token on its next request, so no re-login is needed after upgrading.)
+- **Three ways to present a credential**, whichever validates first wins: `Authorization: Bearer <jwt>`, `?token=<jwt>`, or the `harness_session` cookie. The Bearer form is what lets a script or a mounted client talk to `files.<domain>` without a browser.
+- **The long-lived `TOKEN_*` values never live in the browser.** They (and the master `JWT_SECRET`) are only ever presented once, at login.
+
+If a session *does* get rejected, the auth service says so explicitly — `docker compose logs auth | grep "auth:"` prints one line per rejection with the host and reason, so "did it log me out, or did something else break?" is answerable rather than guesswork.
+
+Staying *connected* is a separate concern from staying logged in, and has two knobs:
+
+- `IDLE_EXEMPT=claude,opencode` — harness types the idle sweep must never stop. Stopping a container kills its tmux server and every CLI session inside it, so a conversation left open is gone on the next visit even though the cookie is still perfectly valid. Exempt whichever harnesses you keep long-running work in; everything else still sleeps after `IDLE_TIMEOUT_MIN`.
+- The browser terminal reconnects itself. `ttyd` only auto-retries on an abnormal socket close, so the bundled terminal script also synthesizes the "press Enter to reconnect" keypress and, if the terminal is still stuck ~12 seconds later, reloads the page (max 3 reloads per 2 minutes) — which replays cookie → auth → container start → `tmux attach` and lands back in the same session. Backgrounded tabs are left alone until they're visible again.
 
 ## Multiple simultaneous sessions per harness
 
@@ -156,7 +172,11 @@ See `.env.example` for the full, commented list. Highlights beyond the provider 
 |---|---|
 | `HARNESS_BASE_DOMAIN` | the base domain every harness subdomain lives under |
 | `JWT_SECRET` | signs every per-harness token; rotating it invalidates all of them instantly |
+| `SESSION_TTL_DAYS` / `SESSION_REFRESH_DAYS` | lifetime of the browser session minted at login, and how much of it must remain before it is slid forward |
+| `SESSION_SCOPE` | `all` (default) → one login covers every subdomain incl. `files`; `harness` → per-harness pinning |
 | `IDLE_TIMEOUT_MIN` | minutes of no connected client before a container is stopped (`0` disables) |
+| `IDLE_EXEMPT` | harness types the idle sweep never stops, e.g. `claude,opencode` — their tmux sessions then survive any amount of idleness |
+| `COLD_START_TIMEOUT_S` | seconds `/verify` waits for a cold-starting harness before returning 504 (claude needs >60s to register its MCP servers) |
 | `RETENTION_DAYS` | days of inactivity before an unpinned dynamic session is torn down |
 | `MAX_INSTANCES_PER_HARNESS` | cap on concurrent dynamic sessions per harness type (`0` = unlimited) |
 | `TOKEN_<NAME>` | per-harness JWT (auto-filled by the auth service if left blank) |
@@ -203,8 +223,11 @@ docker compose up -d --force-recreate harness-<name>
 |---|---|---|
 | `404 model does not exist` (Claude Code) | A model alias still points at an unavailable model | Check `ANTHROPIC_DEFAULT_*_MODEL` / the auth service's free-model catalog |
 | MCP tool calls silently ignored | Configured model doesn't support tool calling | Pick a tool-calling model; verify via the provider's `/models` endpoint |
-| 401 on a subdomain | No/expired session cookie | Visit `https://<harness>.<domain>/?token=<jwt>` once |
-| Token works on the wrong subdomain | JWT `harness` claim doesn't match | Each token is pinned to one harness *type* (works on `claude` and any `claude-<slug>`), not across harnesses |
+| 401 on a subdomain | No/expired session cookie | Visit `https://<harness>.<domain>/?token=<jwt>` once; `docker compose logs auth \| grep "auth:"` shows the exact reason for every rejection |
+| Token works on the wrong subdomain | JWT `harness` claim doesn't match | A raw `TOKEN_*` is pinned to one harness *type*; the *session* it mints covers everything unless `SESSION_SCOPE=harness` |
+| Terminal says "Connection Closed" and stays there | Socket dropped while the tab was backgrounded, or the harness was mid-cold-start | It self-heals: the bundled script retries, then reloads after ~12s. If it doesn't, the container is genuinely down — check `docker compose logs auth` |
+| A session (tmux window + CLI conversation) is gone after a break | The container was idle-stopped, which kills its tmux server | Add that harness to `IDLE_EXEMPT`, or raise `IDLE_TIMEOUT_MIN` |
+| First visit after a long break 504s | Harness slower to boot than `COLD_START_TIMEOUT_S` | Raise it — claude needs >60s just to register its MCP servers |
 | A `<harness>-<slug>` URL 429s | `MAX_INSTANCES_PER_HARNESS` reached for that type | Let an idle slug time out, or raise the cap |
 | Container never sleeps | `IDLE_TIMEOUT_MIN=0`, or a client still holds an open websocket | Check the value; the idle sweep reads `/proc/net/tcp` for a real connection, not just `/verify` timestamps |
 | All harnesses use the same model | Intended — one provider config drives all 11 | Change `MODEL_NAME`/provider in `.env`, or run a second stack for comparison |

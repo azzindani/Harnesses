@@ -25,15 +25,23 @@ set -a; source .env; set +a
 declare -A PORT=(
   [claude]=7681 [aider]=7681 [opencode]=7681 [crush]=7681 [gptme]=7681
   [goose]=7681 [plandex]=7681 [qwencode]=7681 [codex]=7681 [pi]=7681 [droid]=7681
+  # files (dufs) is not a CLI harness, but it is a harness-* container behind
+  # the same subdomain+JWT gate, so `./test-all-harnesses.sh files` is a
+  # legitimate way to check that gate end to end. Not in ALL below: it has no
+  # model provider and no CLI process, so only the wake + port checks apply.
+  [files]=7681
 )
 declare -A PROC=(
   [claude]=claude    [aider]=aider          [opencode]=opencode
   [crush]=crush           [gptme]=gptme          [goose]=goose
   [plandex]=plandex       [qwencode]="qwen"      [codex]=codex
-  [pi]="pi"               [droid]=droid
+  [pi]="pi"               [droid]=droid          [files]=""
 )
 # pi ships a stub on the image; skip the process check for it explicitly.
 SKIP_PROC_CHECK="pi"
+# Services with no model provider of their own — the provider probe (which
+# execs curl inside the container) doesn't apply and would just fail.
+SKIP_PROV_CHECK="files"
 
 ALL=( claude aider opencode crush gptme goose plandex qwencode codex pi droid )
 TARGETS=( "$@" ); [ ${#TARGETS[@]} -eq 0 ] && TARGETS=( "${ALL[@]}" )
@@ -83,7 +91,9 @@ for h in "${TARGETS[@]}"; do
 
     # 3. provider reachability from inside the container
     prov_status=skip
-    if [ "$wake" = "PASS" ]; then
+    if echo "$SKIP_PROV_CHECK" | tr ' ' '\n' | grep -qx "$h"; then
+        prov_status="(n/a)"
+    elif [ "$wake" = "PASS" ]; then
         # Try the OpenAI surface (every harness has PROVIDER_BASE_URL via env_file).
         prov_code=$(docker exec "harness-${h}" sh -c 'curl -sS -o /dev/null -w "%{http_code}" --max-time 10 -H "Authorization: Bearer $PROVIDER_API_KEY" "$PROVIDER_BASE_URL/models"' 2>/dev/null || echo EX)
         if [ "$prov_code" = "200" ]; then prov_status=PASS; else prov_status="FAIL($prov_code)"; fi
@@ -109,7 +119,8 @@ for h in "${TARGETS[@]}"; do
 
     printf '%-14s %-10s %-8s %-12s %-14s %s\n' "$h" "$wake" "$port_status" "$prov_status" "$proc_status" "$note"
 
-    if [ "$wake" = "PASS" ] && [ "$port_status" = "PASS" ] && [ "$prov_status" = "PASS" ] \
+    if [ "$wake" = "PASS" ] && [ "$port_status" = "PASS" ] \
+       && { [ "$prov_status" = "PASS" ] || [ "$prov_status" = "(n/a)" ]; } \
        && { [ "$proc_status" = "PASS" ] || [ "$proc_status" = "(web)" ] || [ "$proc_status" = "(skip)" ]; }; then
         PASS=$((PASS+1))
     else

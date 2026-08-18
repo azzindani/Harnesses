@@ -93,9 +93,20 @@ services:
     environment:
       JWT_SECRET: ${JWT_SECRET}
       IDLE_TIMEOUT_MIN: ${IDLE_TIMEOUT_MIN:-30}
+      # Harness types the idle sweep never stops — stopping a container kills
+      # its tmux server and every session in it (see .env.example).
+      IDLE_EXEMPT: ${IDLE_EXEMPT:-}
       RETENTION_DAYS: ${RETENTION_DAYS:-7}
       MAX_INSTANCES_PER_HARNESS: ${MAX_INSTANCES_PER_HARNESS:-5}
       HARNESS_BASE_DOMAIN: ${HARNESS_BASE_DOMAIN:-lab.example.com}
+      # Browser session: minted at login, slid on use, one login for every
+      # subdomain when SESSION_SCOPE=all (see .env.example).
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-360}
+      SESSION_REFRESH_DAYS: ${SESSION_REFRESH_DAYS:-30}
+      SESSION_SCOPE: ${SESSION_SCOPE:-all}
+      # Seconds /verify waits for a cold-starting harness to listen — must
+      # cover the slowest boot (claude registers ~26 MCP servers first).
+      COLD_START_TIMEOUT_S: ${COLD_START_TIMEOUT_S:-120}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Bind-mount .env so the auth service can auto-fill empty TOKEN_*= lines

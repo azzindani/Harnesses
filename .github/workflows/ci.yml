@@ -17,6 +17,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: on a pull_request event gitleaks scans
+          # `<commit>^..<commit>`, which needs the parent commit to exist
+          # locally. The default shallow (depth-1) checkout doesn't have it,
+          # so the action aborts with "unknown revision" and fails the job
+          # without ever scanning. Push events happened to work, which is why
+          # this only showed up on the repo's first PR.
+          fetch-depth: 0
 
       - name: shellcheck (entrypoints + test scripts)
         run: |
