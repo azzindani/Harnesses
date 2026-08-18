@@ -176,7 +176,13 @@ cat > /root/.config/opencode/tui.json <<'EOF'
 EOF
 
 tmux new-session -d -s main -c /workspace
-tmux send-keys -t main "opencode" Enter
+# `--continue` resumes the last session, so waking the container after an
+# idle-stop lands back in the conversation instead of a blank one (the session
+# data itself already survives in ./history/opencode). `|| opencode` covers the
+# first-ever boot, when there's no last session to continue. Deliberately NOT
+# applied to dynamic <harness>-<slug> sessions -- see the same note in
+# harnesses/claude/entrypoint.sh.
+tmux send-keys -t main "opencode --continue || opencode" Enter
 
 # Light xterm.js theme (true white "notepad" paper), matching the notepad
 # theme above -- covers the shell prompt/chrome around the opencode TUI.
