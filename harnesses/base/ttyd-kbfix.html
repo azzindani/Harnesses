@@ -665,7 +665,18 @@
         } catch (e) { return true; }  /* no sessionStorage → don't block the reload */
       }
 
+      /* Once a reload is under way this document is finished -- firing another
+         would ABORT the in-flight navigation and start over. That matters
+         because the reload can legitimately take a while: if the harness was
+         idle-stopped, its /verify blocks while the container cold-starts (up
+         to a minute for claude, which re-registers ~26 MCP servers before ttyd
+         listens), and the old page stays visible, overlay and all, the whole
+         time. Reloading on a timer through that window would cancel the very
+         request that is waking the container. */
+      var reloading = false;
+
       setInterval(function () {
+        if (reloading) return;
         /* A hidden tab is expected to be disconnected; don't reload it, and
            don't let its time away count towards the stuck window either. */
         if (document.hidden || !disconnectedOverlay()) { stuckSince = 0; return; }
@@ -673,6 +684,7 @@
         if (Date.now() - stuckSince < STUCK_MS) return;
         stuckSince = 0;
         if (reloadBudgetLeft()) {
+          reloading = true;
           try { console.log('[lab-kbfix] terminal stuck disconnected — reloading'); } catch (_) {}
           location.reload();
         }
