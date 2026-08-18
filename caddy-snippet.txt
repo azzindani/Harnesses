@@ -32,18 +32,29 @@
 #      (or https://<harness>-<slug>.lab.example.com/?token=<jwt> for an extra
 #      session — any existing token for that harness type works).
 #   2. @hastoken handler rewrites to /issue and proxies to harnesses-auth.
-#      Auth validates the token, sets an HttpOnly cookie scoped to
-#      .lab.example.com (one cookie unlocks every subdomain), and 302s to /.
+#      Auth validates the token, then EXCHANGES it for a freshly-minted
+#      session token in an HttpOnly cookie scoped to .lab.example.com (one
+#      cookie unlocks every subdomain, files included), and 302s to /.
 #   3. Subsequent requests hit forward_auth, which calls auth
 #      /verify?harness=<name>. Auth validates the cookie, ensures the target
-#      container is running (cold-start blocks 3-7s), and for a
+#      container is running (cold-start can take a minute or more for
+#      harnesses that register MCP servers first), and for a
 #      `<harness>-<slug>` hostname docker-execs an extra tmux+ttyd session
 #      into that SAME base container if one isn't already there.
 #   4. On 200, Caddy proxies to the harness/port named in the response's
-#      X-Harness-Upstream header.
+#      X-Harness-Upstream header, and — when auth also returned
+#      X-Harness-Session — sets the refreshed session cookie on the response,
+#      which is what keeps an in-use login from ever expiring.
 #
 # Reload after editing:
 #   docker exec caddy-router caddy reload --config /etc/caddy/Caddyfile
+#
+# ...but if the Caddyfile is bind-mounted as a SINGLE FILE (the usual
+# `./Caddyfile:/etc/caddy/Caddyfile:ro`), an editor that replaces the file
+# instead of writing in place leaves the container bound to the old inode:
+# the reload succeeds and silently re-applies the OLD config. Recreate the
+# container (`docker compose up -d --force-recreate caddy`) when a reload
+# doesn't take effect.
 #
 # IMPORTANT: do not add a separate static `<name>.lab.example.com { ... }`
 # block alongside the wildcard block below — Caddy's automatic HTTPS treats
@@ -80,7 +91,12 @@
             # proxy to (auth allocates a port dynamically — multiple sessions
             # of one harness type share a single container on different
             # ports, so the hostname alone doesn't determine the target).
-            copy_headers Cookie X-Harness-Upstream
+            # X-Harness-Session, when present, is a complete Set-Cookie value
+            # for a slid/upgraded session cookie (auth mints one when the
+            # browser's cookie is close to expiring, or predates the session
+            # model). Copied here, emitted to the browser in the site block
+            # below. Harmless when absent.
+            copy_headers Cookie X-Harness-Upstream X-Harness-Session
             # ttyd uses WebSockets; without stripping the upgrade headers
             # uvicorn rejects the /verify GET with 400 Bad Request and Caddy
             # then 403s the WS upgrade to the user's browser.
@@ -103,9 +119,30 @@
     tls {
         on_demand
     }
-    import harness_auth {http.request.host.labels.3}
-    reverse_proxy {http.request.header.X-Harness-Upstream} {
-        flush_interval -1
-        header_up Host {host}
+
+    # Explicit route so source order holds across the whole chain: the
+    # sliding-session `header` has to sit in the SAME handler chain as the
+    # reverse_proxy below to be able to decorate its response (a `header`
+    # inside the harness_auth snippet's own route{} would only wrap handlers
+    # inside that route, not this proxy).
+    route {
+        import harness_auth {http.request.host.labels.3}
+
+        # Sliding session — the piece that makes a login effectively permanent
+        # while it's in use. /verify hands back X-Harness-Session (a full
+        # Set-Cookie value) whenever the presented cookie is due for renewal;
+        # forward_auth's copy_headers put it on this request, and this line
+        # emits it to the browser. No header (the common case) → no-op.
+        @session_refresh header X-Harness-Session *
+        header @session_refresh +Set-Cookie "{http.request.header.X-Harness-Session}"
+
+        # No transport read/write timeouts on purpose: a ttyd terminal is one
+        # long-lived WebSocket, and Caddy's default (no timeout) is exactly
+        # what a terminal left open for days needs. Adding an explicit
+        # read_timeout here would CAP that session, not extend it.
+        reverse_proxy {http.request.header.X-Harness-Upstream} {
+            flush_interval -1
+            header_up Host {host}
+        }
     }
 }

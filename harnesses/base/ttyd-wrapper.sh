@@ -43,7 +43,12 @@ PY
     [ -s "$INDEX" ]
 }
 
-if [ ! -s "$INDEX" ]; then
+# Rebuild when there's no index yet OR when the snippet is newer than the one
+# baked into it. /run survives `docker restart` (it's the container's writable
+# layer, not a tmpfs), and the snippet is bind-mounted from the host -- so
+# without the -nt check an edited ttyd-kbfix.html would silently keep serving
+# the previously-generated index until the container was fully recreated.
+if [ ! -s "$INDEX" ] || [ "$SNIPPET" -nt "$INDEX" ]; then
     build_index || true
 fi
 
