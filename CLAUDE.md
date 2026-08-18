@@ -19,7 +19,9 @@ Shared Caddy reverse proxy (external to this repo — see caddy-snippet.txt)
   ├── on-demand TLS "ask" gate ──► auth:/ask   (is this hostname ours?)
   │
   └── forward_auth ──► auth:/verify
-        │                  ├─ validates the JWT cookie
+        │                  ├─ validates the session cookie (or Bearer, or ?token=)
+        │                  ├─ re-mints it when near expiry → X-Harness-Session
+        │                  │  (Caddy copies it onto the response as Set-Cookie)
         │                  ├─ starts the target container if it's stopped
         │                  ├─ for a "<harness>-<slug>" hostname, docker-execs
         │                  │  an extra tmux+ttyd session into the SAME base
@@ -70,7 +72,7 @@ Makefile                  # tokens, build, up/down, router-reload (targets the e
 auth/server.py            # JWT gate + container lifecycle + free-model proxy — the one always-on brain
 scripts/generate-tokens.py
 scripts/test-all-harnesses.sh
-harnesses/base/           # shared image: Dockerfile, tmux.conf, ttyd-wrapper.sh, ttyd-kbfix.html (clipboard/scroll), new-session.sh
+harnesses/base/           # shared image: Dockerfile, tmux.conf, ttyd-wrapper.sh, ttyd-kbfix.html (clipboard/scroll/reconnect), new-session.sh
 harnesses/<name>/          # Dockerfile + entrypoint.sh (writes that CLI's config, launches tmux+ttyd)
 web-mcp/                  # bundled DuckDuckGo search/fetch MCP sidecar
 caddy-snippet.txt         # append-only block for the external Caddy instance
@@ -134,8 +136,11 @@ make router-reload
 |---|---|---|
 | `404 model does not exist` (Claude Code) | A model alias points at an unavailable model | Check `ANTHROPIC_DEFAULT_*_MODEL` / the auth service's free-model catalog |
 | MCP tool calls silently ignored | Configured model doesn't support tool calling | Pick a tool-calling model; verify via the provider's `/models` endpoint |
-| 401 on a subdomain | No/expired session cookie | Visit `https://<harness>.<domain>/?token=<jwt>` once |
-| Token works on the wrong subdomain | JWT `harness` claim doesn't match | Each token is pinned to one harness type (works on `claude` and any `claude-<slug>`) |
+| 401 on a subdomain | No/expired session cookie | Visit `https://<harness>.<domain>/?token=<jwt>` once. `docker compose logs auth \| grep "auth:"` names the exact reason for every rejection — no credential vs. rejected one |
+| A raw `TOKEN_*` 403s on another subdomain | Its `harness` claim pins it to one type (`claude` + any `claude-<slug>`) | Expected. The *session* it mints is lab-wide under `SESSION_SCOPE=all`, so log in once anywhere and every subdomain incl. `files` opens |
+| Terminal window is fresh after a break, conversation intact | The container was idle-stopped (tmux dies with it) and the CLI relaunched with `--continue` | Working as designed — see the idle-stop gotcha above |
+| Waking a slept harness takes ~a minute | claude re-registers ~26 MCP servers before ttyd listens | Expected; `COLD_START_TIMEOUT_S=120` covers it. Trim `MCP_*` vars to speed it up |
+| Terminal stuck on "Connection Closed" | Socket dropped and ttyd's single retry didn't take | Self-heals: `ttyd-kbfix.html` synthesizes the reconnect keypress, then reloads once after ~12s. If it persists, the container is genuinely down |
 | `<harness>-<slug>` URL 429s | `MAX_INSTANCES_PER_HARNESS` reached | Let an idle slug time out, or raise the cap |
 | Container never sleeps | `IDLE_TIMEOUT_MIN=0`, or a client still holds an open websocket | Idle sweep checks for a real TCP connection, not just `/verify` timestamps |
 | Caddy cert resolution breaks for a harness subdomain | A static per-hostname block was added alongside the wildcard block | Remove it — see the gotcha above |
