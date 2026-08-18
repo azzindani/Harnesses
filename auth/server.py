@@ -126,11 +126,17 @@ INSTANCE_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$")
 ENV_FILE = "/app/.env"  # bind-mounted from host docker-compose.yml
 INSTANCES_FILE = "/data/instances.json"  # persisted across auth-service restarts
 
-# Exact launch command each harness's own entrypoint.sh sends to its "main"
-# tmux session (`tmux send-keys -t main "<cmd>" Enter`) -- replicated here so
-# a dynamic session boots the identical CLI. {model} is filled in from this
-# service's own MODEL_NAME env var (same value every harness gets via the
-# compose env anchors). Keep in sync with harnesses/<name>/entrypoint.sh.
+# Launch command for a DYNAMIC <harness>-<slug> session, mirroring what each
+# harness's own entrypoint.sh sends to its "main" tmux session (`tmux send-keys
+# -t main "<cmd>" Enter`) so a slug boots the identical CLI. {model} is filled
+# in from this service's own MODEL_NAME env var (same value every harness gets
+# via the compose env anchors). Keep in sync with harnesses/<name>/
+# entrypoint.sh, with ONE deliberate difference: claude's and opencode's
+# entrypoints launch their "main" session with `--continue` so that waking a
+# container the idle sweep stopped resumes the conversation instead of starting
+# blank. Slugs must NOT do that -- every slug of one harness shares this
+# container's single /workspace, so `--continue` would point all of them at the
+# same conversation and have them fight over it.
 HARNESS_LAUNCH_CMD = {
     "claude": "claude --dangerously-skip-permissions",
     "aider": (
