@@ -1,4 +1,8 @@
 .env
+# A timestamped backup of .env is a full plaintext copy of every MCP bearer
+# token and the provider key. The bare `.env` line above does not match
+# `.env.bak.<stamp>`, so one sat untracked-but-committable for a day.
+.env.*
 project/**
 !project/.gitkeep
 data/**

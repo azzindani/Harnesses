@@ -10,6 +10,7 @@ mkdir -p /root/.config/opencode
 #   WEB_MCP_URL                     -> "web"   (no auth, only if set)
 #   MATH/BROWSER/FS_MCP_URL+TOKEN   -> "math"/"browser"/"filesystem"
 #   ML/DATA/OFFICE_MCP_BASE_URL+TOKEN -> "<repo>-<sub-server>" per sub-server
+#   MCP_DISABLED                    -> comma-separated names to leave out
 python3 - <<'PY'
 import json, os
 
@@ -87,6 +88,16 @@ for prefix, base_var, token_var, subs in _multi:
     if base and token:
         for sub in subs:
             mcp[prefix + "-" + sub] = _remote(base + "/" + sub + "/mcp", token)
+
+# Drop the servers this harness is not meant to see. Names match either a whole
+# entry ("math", "folio", "office-xlsx-new") or the repo prefix of a multi-server
+# repo ("office" removes all eleven). Registering a server the session will not
+# use is not free: every tool it exposes is spent context in the model's tool
+# list, and a sweep that is scoped to four repos should not be told about six.
+# Leaving the URL and token in .env means re-enabling is a one-word edit.
+_disabled = {n.strip().lower() for n in os.environ.get("MCP_DISABLED", "").split(",") if n.strip()}
+if _disabled:
+    mcp = {k: v for k, v in mcp.items() if k not in _disabled and k.split("-")[0] not in _disabled}
 
 if mcp:
     config["mcp"] = mcp
