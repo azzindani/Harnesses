@@ -78,19 +78,82 @@ AXES[11] = {
 }
 
 
-# Round 12 is not written yet. The candidates below came out of round 11 and are
-# kept here so the next round starts from evidence rather than from a fresh idea:
+AXES[12] = {
+    "name": "the empty case",
+    "why": (
+        "Ten rounds have handed every tool a 16,834-row dataset. Nothing has ever asked what "
+        "happens when the input is real, valid, well-formed and holds nothing -- a CSV with "
+        "headers and no rows, a document with no paragraphs, a workbook with one blank sheet. "
+        "It is the most ordinary edge case there is, and round 11 hit two of them by accident: "
+        "auto_detect_schema and read_model_report both reported confidently on nothing. A mean "
+        "of no numbers, a quality score of 100 on no rows, and '0 outliers found' offered as a "
+        "clean bill of health are all wrong answers wearing success: true."
+    ),
+    "main": (
+        "THE MAIN TASK OF THIS PHASE: give every tool an input that is real, valid and EMPTY, and "
+        "find out whether it says so. First build ONE empty input of the kind this phase's tools "
+        "read -- a CSV with a correct header row and no data rows, a .docx with no paragraphs, a "
+        "workbook with a single blank sheet, whichever fits -- and check it is genuinely valid by "
+        "opening it with a read or inspect tool. Then call every tool in the phase on it, once. "
+        "For each tool record which of these happened: it REFUSED and the message named the "
+        "emptiness; it REFUSED but the message blamed something else, or named no cause at all; "
+        "it SUCCEEDED and returned a number, a score, a chart or a file. The third is the finding "
+        "this round is looking for, and the ones worth the most detail are a statistic computed "
+        "from no observations, a quality or confidence score on nothing, a count of zero presented "
+        "as a good result, an empty chart or an empty document written to disk as though it held "
+        "something, and a model trained on no rows. Write down the exact number or file it "
+        "produced. A clean refusal that names the cause is a PASS and needs one line. "
+    ),
+    "unit": "call",
+    "columns": (
+        "tool name | refused / refused-wrong-cause / succeeded | what it returned or wrote | "
+        "is that answer real? | notes"
+    ),
+    "columns_ops": (
+        "op name | refused / refused-wrong-cause / succeeded | what it returned or wrote | notes"
+    ),
+    "fs_extra": {
+        "fsw1": (
+            "The empty input for this phase is an existing but zero-byte file, and an existing but "
+            "empty directory. Run each op against those rather than against a populated tree: "
+            "copying, moving and renaming a zero-byte file must all still work and say so, while "
+            "replace_text and insert_after have nothing to match and should say that rather than "
+            "report a successful edit of nothing."
+        ),
+        "fsw2": (
+            "Use a zero-byte file and an empty directory as the targets. delete_lines and "
+            "patch_lines on a file with no lines, and the delete_tree pair on a directory with no "
+            "entries, are the calls to watch: an op that reports it removed something from an "
+            "empty file is the finding."
+        ),
+        "fsr1": (
+            "Read a zero-byte file and an empty directory. fs_read mode=content on no bytes, "
+            "mode=tree on no entries, and fs_query over a directory holding nothing must each be "
+            "distinguishable from an error and from a directory that does not exist -- round 11 "
+            "fixed exactly that ambiguity in fs_index, and this is the same question one tool over."
+        ),
+        "fsr2": (
+            "Build the index over an empty directory, archive an empty directory, and extract an "
+            "archive that holds nothing. An index reporting 0 entries, an archive of nothing, and "
+            "disk_usage on an empty tree all have a right answer and a plausible wrong one."
+        ),
+    },
+}
+
+
+# Candidates left over, kept so the round after this starts from evidence rather
+# than from a fresh idea:
 #
 #   argument order    every tool called with its arguments supplied by keyword in
 #                     reverse declaration order. Round 11 fixed five trainers by
 #                     appending output_path last, on the rule that a positional
 #                     swap silently rebinds callers -- untested above the rule.
 #
-#   the empty case    every tool given a real but empty input: a CSV with headers
-#                     and no rows, a document with no paragraphs, a workbook with
-#                     one blank sheet. Round 11 found auto_detect_schema and
-#                     read_model_report both reporting confidently on nothing.
-#
 #   two clients       the same file touched by two servers in one phase --
 #                     data-basic writes it, office-xlsx reads it. Every round so
 #                     far has stayed inside one server per phase.
+#
+#   one row           the input that is valid and holds exactly one observation.
+#                     Variance, correlation and every interval are undefined at
+#                     n=1, and a tool that returns 0.0 for a standard deviation
+#                     is making the same class of claim the empty case tests.

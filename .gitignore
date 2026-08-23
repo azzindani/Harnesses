@@ -21,3 +21,8 @@ __pycache__/
 .b_*.txt
 .run_*.jsonl
 .folio-loop-*
+
+# Generated sweep artifacts: the plan is rebuilt from axes.py + a live
+# tools/list, and the log is per-run.
+scripts/sweep/phases_r*.tsv
+scripts/sweep/sweep.log

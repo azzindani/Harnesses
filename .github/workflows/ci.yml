@@ -33,6 +33,7 @@ jobs:
           # Fail only on errors — warnings/info are advisory for this lab.
           shellcheck -S error \
             scripts/*.sh \
+            scripts/sweep/*.sh \
             harnesses/*/entrypoint.sh
 
       - name: python syntax check
