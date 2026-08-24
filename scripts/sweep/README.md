@@ -62,3 +62,32 @@ sweep found five tools whose second identical call wrote a second file.
   halfway; at eight, round 10 ran 38 of 39 phases on the first attempt.
 - File_System is covered as named operations, not as six tool calls — its six
   tools carry a dozen operations each behind an `op`/`action` argument.
+
+## verify_n1.sh — confirming a round's fixes reached the endpoints
+
+A round produces fixes; the fixes need a re-check, and that re-check should not
+depend on a model. `verify_n1.sh` calls each tool fixed for round 13's n=1 axis
+directly over MCP and greps its response for the thing that used to be wrong —
+`"outlier_count_iqr":null` where a fence with no width once reported 0,
+`residual degrees of freedom` where the caller once got scipy's
+`'float' object has no attribute 'dtype'`.
+
+Direct curl rather than the harness, for three reasons: it takes seconds
+instead of an hour, it cannot be defeated by a provider outage (which cost two
+rounds this month), and a grep for an exact string is a stronger check than a
+model's prose verdict — see the note in reference_what_finds_defects about not
+classifying verdicts with a regex.
+
+    ./verify_n1.sh          # 18 checks, exits non-zero on the first mismatch
+
+It reads its endpoints and tokens from `/root/Harnesses/.env` and its fixtures
+from `data/n1_verify/`, which is the shared bind mount. **Create that directory
+group-writable** — the servers run as uid 999, and a root-owned 755 directory
+gives every write tool `[Errno 13] Permission denied` on a path it can read
+from perfectly well:
+
+    mkdir -p data/n1_verify && chgrp -R 999 data/n1_verify && chmod -R g+w data/n1_verify
+
+Copy the pattern for the next axis rather than extending this file: a check that
+names the specific string a specific fix introduced stops being meaningful once
+that fix is old.
