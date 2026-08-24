@@ -16,20 +16,43 @@ import json, os
 
 config = {
     "$schema": "https://opencode.ai/config.json",
-    "provider": {
+}
+
+# OPENCODE_MODEL names a model opencode already knows -- one of the entries in
+# `opencode models`, provider included, e.g. opencode/x-preview-f-free. Those
+# providers carry their own endpoint and their own credentials, so the config
+# says which model and nothing else; inventing a provider block for one of them
+# only overrides what already works. That is what the first attempt at this did:
+# it pointed a hand-rolled openai-compatible provider at the OpenCode Zen URL
+# with no key of its own, and every request came back "Invalid API key".
+#
+# Unset, the harness builds the `lab` provider from the shared PROVIDER_* /
+# OPENAI_* environment, which is the OpenRouter-via-auth-proxy route the other
+# twelve harnesses use.
+_qualified = os.environ.get("OPENCODE_MODEL", "").strip()
+if _qualified:
+    config["model"] = _qualified
+else:
+    config["provider"] = {
         "lab": {
             "npm": "@ai-sdk/openai-compatible",
             "options": {
+                # The key follows the same precedence as the URL it is sent to.
+                # These two used to disagree -- the URL preferred OPENAI_*, the
+                # key preferred PROVIDER_* -- so pointing this harness at a
+                # different host kept sending the previous host's credential to
+                # it. Repointing the base URL is exactly when the key must move
+                # with it, so the one case the split mattered was the one that
+                # leaked.
                 "baseURL": os.environ.get("OPENAI_BASE_URL") or os.environ.get("PROVIDER_BASE_URL", ""),
-                "apiKey": os.environ.get("PROVIDER_API_KEY") or "not-used",
+                "apiKey": os.environ.get("OPENAI_API_KEY") or os.environ.get("PROVIDER_API_KEY") or "not-used",
             },
             "models": {
                 os.environ.get("MODEL_NAME", ""): {},
             },
         },
-    },
-    "model": "lab/" + os.environ.get("MODEL_NAME", ""),
-}
+    }
+    config["model"] = "lab/" + os.environ.get("MODEL_NAME", "")
 
 mcp = {}
 
