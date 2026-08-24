@@ -54,6 +54,23 @@ check() {
   fi
 }
 
+# check_file <label> <host-path> <grep-pattern> <expect: yes|no>
+# Several of the round-13 follow-up fixes are about what lands on disk rather
+# than what comes back in the response -- that is how eight of the ten were
+# found. /root/Harnesses/data is the same bind mount the servers write to, so
+# the file can be read straight from the host.
+check_file() {
+  local label="$1" path="$2" want="$3" expect="$4" hit=no
+  [ -f "$path" ] && grep -qE "$want" "$path" && hit=yes
+  if [ "$hit" = "$expect" ]; then
+    printf 'PASS  %-42s file %s /%s/\n' "$label" "$expect" "$want"
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL  %-42s wanted %s /%s/ in %s\n' "$label" "$expect" "$want" "$path"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 echo "=== data_analyst ==="
 check "statistical_tests ttest n=1" "$DATA_BASE/medium/mcp" "$DATA_TOK" statistical_tests \
   "{\"file_path\":\"$DIR/one_row.csv\",\"test_type\":\"ttest\",\"column_a\":\"clicks\",\"column_b\":\"impressions\"}" \
@@ -115,6 +132,54 @@ echo "=== office ==="
 check "read_cell on a formula" "$OFF_BASE/xlsx-basic/mcp" "$OFF_TOK" read_cell \
   "{\"file_path\":\"$DIR/formula.xlsx\",\"sheet_name\":\"Data\",\"cell_address\":\"B5\"}" \
   'formula_uncalculated'
+
+# --- the ten found by re-running the phases, 2026-08-24 --------------------
+#
+# Eight of these were only visible by reading the artifact, not the response.
+# Where that is true the check reads the file.
+
+echo
+echo "=== follow-ups: response and artifact must agree ==="
+
+HOST=/root/Harnesses/data/n1_verify
+
+check "extended_stats cv is not NaN" "$DATA_BASE/statistics/mcp" "$DATA_TOK" extended_stats \
+  "{\"file_path\":\"$DIR/one_row.csv\"}" \
+  '"cv":(null|-?[0-9])'
+check "correlation_heatmap says n" "$DATA_BASE/visual/mcp" "$DATA_TOK" generate_correlation_heatmap \
+  "{\"file_path\":\"$DIR/one_row.csv\",\"output_path\":\"$DIR/hm.html\",\"open_after\":false}" \
+  '"rows_used":1'
+check "pairwise_plot says n" "$DATA_BASE/visual/mcp" "$DATA_TOK" generate_pairwise_plot \
+  "{\"file_path\":\"$DIR/one_row.csv\",\"output_path\":\"$DIR/pw.html\",\"open_after\":false}" \
+  '"rows_used":1'
+check "run_eda does not score a clean row 0" "$DATA_BASE/visual/mcp" "$DATA_TOK" run_eda \
+  "{\"file_path\":\"$DIR/one_row.csv\",\"output_path\":\"$DIR/eda.html\",\"open_after\":false}" \
+  '"quality_score":(8[1-9]|9[0-9]|100)'
+check "customize_chart refuses a textless note" "$DATA_BASE/visual/mcp" "$DATA_TOK" customize_chart \
+  "{\"chart_path\":\"$DIR/hm.html\",\"annotations\":[{\"x\":0,\"y\":1}]}" \
+  '"success":false.*no text'
+
+# normalize must not zero a constant column -- it rewrites the caller's file.
+cp -f "$HOST/const_seed.csv" "$HOST/const.csv" 2>/dev/null || printf 'name,spends\nA,7\nB,7\nC,7\n' > "$HOST/const.csv"
+check "apply_patch reports the no-op" "$DATA_BASE/basic/mcp" "$DATA_TOK" apply_patch \
+  "{\"file_path\":\"$DIR/const.csv\",\"ops\":[{\"op\":\"normalize\",\"column\":\"spends\",\"method\":\"minmax\"}]}" \
+  '"ops_with_no_effect":\[\{'
+check_file "normalize left the 7s alone" "$HOST/const.csv" '^A,7$' yes
+check_file "normalize wrote no zeros" "$HOST/const.csv" '^A,0' no
+
+# detect_anomalies must not write False flags for a column it would not judge.
+check "detect_anomalies count is null" "$DATA_BASE/medium/mcp" "$DATA_TOK" detect_anomalies \
+  "{\"file_path\":\"$DIR/one_row.csv\",\"output_path\":\"$DIR/anom.csv\"}" \
+  '"anomaly_count":null'
+check_file "no _iqr_flag column written" "$HOST/anom.csv" '_iqr_flag' no
+check_file "no _anomaly_score column written" "$HOST/anom.csv" '_anomaly_score' no
+
+check "check_data_quality qualifies its score" "$ML_BASE/medium/mcp" "$ML_TOK" check_data_quality \
+  "{\"file_path\":\"$DIR/one_row.csv\"}" \
+  'score_note.*could not run'
+check "zero_inflated is not charged at n=1" "$ML_BASE/medium/mcp" "$ML_TOK" check_data_quality \
+  "{\"file_path\":\"$DIR/one_row.csv\"}" \
+  '"alerts_count":0'
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"
