@@ -138,6 +138,8 @@ wait_idle() {
   echo "    TIMED OUT"; return 1
 }
 
+DRY=0   # consecutive phases that wrote nothing
+
 echo "SWEEP $(basename "$PLAN") $(date -u +%FT%TZ) — phases $SEL" | tee -a "$LOG"
 
 ensure_alive || exit 1
@@ -174,18 +176,40 @@ while IFS=$'\t' read -r num label report ticks count prompt; do
     lead="$lead Keep each tool's check short and write its report row before moving to the next one."
   fi
 
-  send '/new'; sleep 12
-  if ! send_prompt "$lead $prompt"; then
-    echo "    rows: not attempted (the prompt never reached the session)" | tee -a "$LOG"
-    echo | tee -a "$LOG"
-    continue
-  fi
-  wait_idle "$ticks" | tee -a "$LOG"
+  after=0
+  for try in 1 2; do
+    [ "$try" -gt 1 ] && echo "    nothing was written — attempt $try" | tee -a "$LOG"
+    send '/new'; sleep 12
+    if ! send_prompt "$lead $prompt"; then
+      echo "    the prompt never reached the session" | tee -a "$LOG"
+      continue
+    fi
+    wait_idle "$ticks" | tee -a "$LOG"
+    after=$(grep -c '^| ' "$DATA/$report" 2>/dev/null || echo 0)
+    [ "$after" -gt 1 ] && break
+    ensure_alive || exit 1
+  done
 
-  after=$(grep -c '^| ' "$DATA/$report" 2>/dev/null || echo 0)
   echo "    rows: $((after > 0 ? after - 1 : 0)) of $count" | tee -a "$LOG"
-  if [ "$after" -le 1 ] && ! alive; then
-    echo "    the session died during this phase — the empty report is not the model's doing" | tee -a "$LOG"
+
+  # A phase that writes nothing twice is almost never the model. Round 12 lost
+  # seven phases in a row to a 25-minute provider outage, each in the minimum
+  # 3.7 minutes, while the driver counted them done and moved on -- by the time
+  # anyone looked, a quarter of the round had been consumed and would have to be
+  # re-run anyway. Stop after three in a row and let a person look at it, rather
+  # than spending the remaining phases discovering the same thing.
+  if [ "$after" -le 1 ]; then
+    if ! alive; then
+      echo "    the session died during this phase — the empty report is not the model's doing" | tee -a "$LOG"
+    fi
+    DRY=$((DRY + 1))
+    if [ "$DRY" -ge 3 ]; then
+      echo "THREE PHASES IN A ROW WROTE NOTHING — STOPPING" | tee -a "$LOG"
+      echo "(check the provider: docker exec $C tmux capture-pane -p -t main | tail)" | tee -a "$LOG"
+      exit 3
+    fi
+  else
+    DRY=0
   fi
 
   now=$(md5sum "$DATA/Ad_Data.csv" | cut -d' ' -f1)
