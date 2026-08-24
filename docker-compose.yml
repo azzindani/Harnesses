@@ -240,6 +240,11 @@ services:
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
+      # Set OPENCODE_MODEL to a provider-qualified id opencode already knows
+      # (`opencode models`, e.g. opencode/x-preview-f-free) to use that provider
+      # and its own credentials instead of the shared OpenRouter route. Only this
+      # harness is affected; unset, nothing changes.
+      OPENCODE_MODEL: ${OPENCODE_MODEL:-}
 
   harness-crush:
     <<: *harness-defaults
