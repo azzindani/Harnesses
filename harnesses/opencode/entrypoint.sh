@@ -210,13 +210,31 @@ cat > /root/.config/opencode/tui.json <<'EOF'
 EOF
 
 tmux new-session -d -s main -c /workspace
+
+# --model, from the same value written into config.json above.
+#
+# config.json only supplies the *default* model. Once someone picks one in the
+# TUI, that choice is recorded on the session row and every new session inherits
+# it, so a session started before a config change keeps using the old model
+# indefinitely -- recreating the container does not clear it, because the
+# session database is a bind mount that outlives the container. Switching the
+# harness back to OpenRouter left the TUI still on the OpenCode Zen model it had
+# been pointed at hours earlier, which was by then out of free quota.
+#
+# Passing it on the command line pins each boot to the configured model.
+if [ -n "${OPENCODE_MODEL:-}" ]; then
+  OC_MODEL="$OPENCODE_MODEL"
+else
+  OC_MODEL="lab/${MODEL_NAME}"
+fi
+
 # `--continue` resumes the last session, so waking the container after an
 # idle-stop lands back in the conversation instead of a blank one (the session
 # data itself already survives in ./history/opencode). `|| opencode` covers the
 # first-ever boot, when there's no last session to continue. Deliberately NOT
 # applied to dynamic <harness>-<slug> sessions -- see the same note in
 # harnesses/claude/entrypoint.sh.
-tmux send-keys -t main "opencode --continue || opencode" Enter
+tmux send-keys -t main "opencode --model '$OC_MODEL' --continue || opencode --model '$OC_MODEL'" Enter
 
 # Light xterm.js theme (true white "notepad" paper), matching the notepad
 # theme above -- covers the shell prompt/chrome around the opencode TUI.
