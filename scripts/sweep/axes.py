@@ -141,6 +141,69 @@ AXES[12] = {
 }
 
 
+AXES[13] = {
+    "name": "exactly one row",
+    "why": (
+        "Round 12 asked what happens with no observations and found four tools answering "
+        "confidently about nothing -- a type inferred from an empty set, a quality score of "
+        "30/100 on zero rows, two library exceptions surfacing as the error message. One row is "
+        "the same question one step along, and it is harder: an empty frame at least looks "
+        "obviously wrong, while n=1 produces numbers that are individually plausible. Variance, "
+        "standard deviation, correlation, skewness, every confidence interval and every "
+        "regression slope is undefined or degenerate at a single observation, and the usual "
+        "wrong answer is 0.0 -- which reads as 'no variation measured' rather than 'not "
+        "measurable'. A single row is also a real thing to be handed: a filter that matched one "
+        "record, a report for one day, a dataset still being loaded."
+    ),
+    "main": (
+        "THE MAIN TASK OF THIS PHASE: give every tool an input holding EXACTLY ONE row, and find "
+        "out whether the numbers it returns are real. Build one input of the kind this phase's "
+        "tools read -- a CSV with a header and a single data row, a document with one paragraph, "
+        "a workbook with one row under its header -- and confirm it is valid by opening it with a "
+        "read or inspect tool. Then call every tool in the phase on it, once. For each tool "
+        "record what it returned and whether that answer is defined at n=1. The findings to look "
+        "hardest for are a spread reported as a number: a standard deviation or variance of 0.0, "
+        "a correlation of 0.0 or 1.0, a confidence interval of zero width, an R-squared of 1.0, a "
+        "skewness or kurtosis at all, a percentile spread where every percentile is the same "
+        "value, a trend or forecast extrapolated from one point, and a model reporting perfect "
+        "accuracy because it was trained and scored on the same single row. Each of those has a "
+        "right answer -- undefined, null, or a refusal naming n -- and a plausible wrong one. "
+        "Say which you got. A tool that refuses and names the single row is a PASS in one line. "
+    ),
+    "unit": "call",
+    "columns": (
+        "tool name | refused / succeeded | what it returned | is that defined at n=1? | notes"
+    ),
+    "columns_ops": ("op name | refused / succeeded | what it returned or wrote | notes"),
+    "fs_extra": {
+        "fsw1": (
+            "The one-row input here is a file holding a single line with no trailing newline. "
+            "Run each op against it: append_file to a file whose last line has no newline, "
+            "replace_text and insert_after matching that only line, and copy/move/rename of a "
+            "one-line file. Whether the append lands on the same line or a new one is the thing "
+            "to check, and to read back rather than assume."
+        ),
+        "fsw2": (
+            "Use a single-line file and a directory holding exactly one entry. delete_lines "
+            "removing the only line, patch_lines on a one-line file, and delete_tree on a "
+            "directory with one child are the calls to watch: leaving a zero-line file and "
+            "reporting it as an edit is different from refusing."
+        ),
+        "fsr1": (
+            "Read a file of exactly one line, and a directory with exactly one entry. Check "
+            "fs_read mode=content start_line=0 end_line=1 returns that line and reports "
+            "total_lines=1, that truncated is not set when the whole file was returned, and "
+            "that mode=diff against an identical one-line copy reports no difference."
+        ),
+        "fsr2": (
+            "Index a directory holding one file, archive it, and extract it. An index of one "
+            "entry, an archive of one file, and disk_usage over a single-file tree each have an "
+            "exact right answer that is cheap to verify by hand -- so verify it."
+        ),
+    },
+}
+
+
 # Candidates left over, kept so the round after this starts from evidence rather
 # than from a fresh idea:
 #
@@ -152,8 +215,3 @@ AXES[12] = {
 #   two clients       the same file touched by two servers in one phase --
 #                     data-basic writes it, office-xlsx reads it. Every round so
 #                     far has stayed inside one server per phase.
-#
-#   one row           the input that is valid and holds exactly one observation.
-#                     Variance, correlation and every interval are undefined at
-#                     n=1, and a tool that returns 0.0 for a standard deviation
-#                     is making the same class of claim the empty case tests.
