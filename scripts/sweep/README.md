@@ -31,14 +31,17 @@ data-medium	pivot_table
 data-medium	sample_data
 ```
 
-Take it from `tools/list` on each endpoint. **Never** from a list the sweep
-model writes for itself — asked to "list the tools then call each", it once
-listed some, called none, and reported a clean pass over 19 tools it never
-touched.
+Take it from `tools/list` on each endpoint — `./refresh_tools.sh > tools_rNN.tsv`
+does exactly that, one MCP session per mount, and refuses to write a list if any
+endpoint answers with zero tools. **Never** from a list the sweep model writes
+for itself — asked to "list the tools then call each", it once listed some,
+called none, and reported a clean pass over 19 tools it never touched.
 
 ## Starting a round
 
-1. Refresh the tools file from `tools/list`.
+1. Refresh the tools file: `./refresh_tools.sh > tools_rNN.tsv`, and diff it
+   against the previous round's — a tool that silently disappeared from an
+   endpoint is worth knowing about before the round, not after.
 2. Add an entry to `AXES` in `axes.py`. The commented candidates at the bottom
    of that file are the leftovers from round 11, kept so the next round starts
    from evidence.
