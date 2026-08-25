@@ -58,6 +58,25 @@ _SCRIPT_BODY = re.compile(r"(<script\b[^>]*>).*?</script>", re.I | re.S)
 _REF = re.compile(r"""\b(?:src|href)\s*=\s*["']([^"']+)["']""", re.I)
 _INERT_PREFIXES = ("data:", "#", "javascript:", "about:", "mailto:")
 
+# Count plot containers and how many of them actually drew.
+#
+# Two classes, because the fleet writes charts two ways. `fig.to_html()` puts
+# `plotly-graph-div` in the markup; a report page that composes its own layout
+# calls Plotly.newPlot on a div of its own and only the runtime marks it, as
+# `js-plotly-plot`. Keying on the first alone reported "opened" for a profile
+# report holding twenty drawn charts -- the guard skipping its own check on
+# exactly the pages that have the most to check.
+#
+# And containers-that-drew rather than a count of <svg>: plotly builds three
+# `svg.main-svg` per plot, so counting them read "3/1 drew" for one chart and
+# would have read 3/2 for two charts of which one was blank.
+_COUNT_PLOTS = """() => {
+  const nodes = document.querySelectorAll('.plotly-graph-div, .js-plotly-plot');
+  let drawn = 0;
+  nodes.forEach(n => { if (n.querySelector('svg.main-svg')) drawn += 1; });
+  return {containers: nodes.length, drawn};
+}"""
+
 # Files the servers write beside an artifact rather than as one. They are
 # checked as their own JSON, not as a dependency of the file they sit next to.
 _SIDECAR_SUFFIXES = (".mcp_receipt.json",)
@@ -110,6 +129,8 @@ def check_html(path: Path, shots: Path | None, browser) -> dict:
     result: dict = {
         "kind": "html",
         "refs": external_refs(text),
+        # Counted again from the rendered page below; this is only a floor for
+        # pages that ship the class in their markup.
         "divs": text.count('class="plotly-graph-div"'),
     }
     if verbatim:
@@ -142,8 +163,9 @@ def check_html(path: Path, shots: Path | None, browser) -> dict:
         try:
             page.goto(alone.as_uri(), wait_until="load", timeout=45_000)
             page.wait_for_timeout(3_000)
-            result["drawn"] = page.locator(".plotly-graph-div svg.main-svg").count()
-            result["divs"] = max(result["divs"], page.locator(".plotly-graph-div").count())
+            counts = page.evaluate(_COUNT_PLOTS)
+            result["divs"] = max(result["divs"], counts["containers"])
+            result["drawn"] = counts["drawn"]
             result["text_len"] = len(page.locator("body").inner_text())
             if shots is not None:
                 shot = shots / (path.stem + ".png")
@@ -297,12 +319,23 @@ def self_check() -> int:
     )
     cases.append(("a page that fetches when opened", remote, "fetched"))
 
-    # 3. Right extension, wrong insides.
+    # 3. A report page that composes its own layout: the container is only
+    #    marked by plotly's runtime, as js-plotly-plot, and never carries
+    #    plotly-graph-div. Keying on that class alone skipped these entirely.
+    report = tmp / "report_style.html"
+    report.write_text(
+        '<div id="c1" class="js-plotly-plot"></div>'
+        '<div id="c2" class="js-plotly-plot"></div>',
+        encoding="utf-8",
+    )
+    cases.append(("a report page whose charts never drew", report, "none drew"))
+
+    # 4. Right extension, wrong insides.
     fake = tmp / "not_really.xlsx"
     fake.write_bytes(b"this is not a workbook")
     cases.append(("a .xlsx that is not one", fake, "will not open"))
 
-    # 4. Written, reported, empty.
+    # 5. Written, reported, empty.
     blank = tmp / "blank_report.md"
     blank.write_text("   \n", encoding="utf-8")
     cases.append(("a report with nothing in it", blank, "empty"))
