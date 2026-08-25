@@ -204,6 +204,66 @@ AXES[13] = {
 }
 
 
+AXES[14] = {
+    "name": "the vocabulary a tool advertises",
+    "why": (
+        "Every tool teaches a vocabulary -- the ops it lists, the keys it says a dict holds, the "
+        "values it names in its own description -- and nothing checks that the vocabulary it "
+        "teaches is the one it accepts. Round 14's fixes came from asking exactly that of eight "
+        "tools and finding all eight wrong: one listed 52 operations in a catalog tool and ran 8 "
+        "of them; one documented a list of dicts and named none of the keys, so a wrong guess "
+        "came back as the single quoted word 'label'; one dropped a paragraph written under a "
+        "key it did not recognise and saved an empty document under success. This phase re-asks "
+        "it of the tools those fixes can reach. The gap matters because it is invisible from "
+        "either side on its own: the description looks complete, the tool looks like it works, "
+        "and only handing the tool exactly what it told you to hand it shows the two disagree."
+    ),
+    "main": (
+        "THE MAIN TASK OF THIS PHASE: take each tool's own description as a specification and "
+        "hold it to it. For every tool, first read what its description, schema and any catalog "
+        "tool claim it accepts -- the operations it names, the values it enumerates, the keys it "
+        "says a dict or list entry holds -- and write that down. Then call it with exactly that, "
+        "one claim at a time. Where a tool names a set of operations or modes, try ones from "
+        "different parts of the list, not just the first. Where a tool takes a list of dicts, "
+        "build the dict from the keys its description names, and then also try the obvious "
+        "synonym a person would reach for -- 'content' for text, 'header' for heading, '>' for "
+        "gt, 'then' for label. The three answers that matter are: it worked; it refused and the "
+        "refusal named what to write instead; or IT REPORTED SUCCESS AND QUIETLY DID LESS THAN "
+        "ASKED. The third is the finding. A tool that refuses a spelling it never promised is "
+        "fine and is a PASS in one line -- as long as the error names the accepted spelling. A "
+        "tool that accepts a call and drops part of it is the defect this phase exists to find. "
+    ),
+    "unit": "call",
+    "columns": (
+        "tool name | what its description claimed | what happened when you sent exactly that "
+        "| did anything get silently dropped? | notes"
+    ),
+    "columns_ops": (
+        "op name | what its description claimed | what happened | anything silently dropped? | notes"
+    ),
+    # Not run this round -- the File_System server was not touched by the fixes
+    # under verification -- but present so the axis is complete if it is re-run.
+    "fs_extra": {
+        "fsw1": (
+            "fs_write names its ops in its own description. Run each one named there, and for "
+            "each check the argument names the description gives are the ones it actually reads."
+        ),
+        "fsw2": (
+            "Same for the remaining fs_write ops: take the op names and argument names from the "
+            "description and use exactly those, then read back what landed."
+        ),
+        "fsr1": (
+            "fs_read names its modes. Call every mode the description lists, and check a mode it "
+            "does not list is refused with a message naming the ones it does."
+        ),
+        "fsr2": (
+            "fs_index, fs_manage and fs_archive each name their ops. Call every op named, and "
+            "record any that the tool rejects despite naming it."
+        ),
+    },
+}
+
+
 # Candidates left over, kept so the round after this starts from evidence rather
 # than from a fresh idea:
 #
