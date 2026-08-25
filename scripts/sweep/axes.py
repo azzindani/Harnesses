@@ -11,6 +11,10 @@ rounds of history, shortest useful summary of each:
      9  write paths            a None-write smeared rows across a sheet
     10  annotations            212 tools declared no MCP annotations at all
     11  retry / idempotence    idempotentHint was assigned by category, never measured
+    12  the empty case         a zero-row input came back as a confident zero
+    13  exactly one row        n=1 statistics returned 0 where there is no value
+    14  advertised vocabulary  a catalog listed 52 ops and the tool ran 8 of them
+    15  the artifact           the reply was true and the file it named was unusable
 
 Fields:
 
@@ -259,6 +263,81 @@ AXES[14] = {
         "fsr2": (
             "fs_index, fs_manage and fs_archive each name their ops. Call every op named, and "
             "record any that the tool rejects despite naming it."
+        ),
+    },
+}
+
+
+AXES[15] = {
+    "name": "open the file it wrote",
+    "why": (
+        "Fourteen rounds judged a tool by its reply. Not one ever opened what the tool produced. "
+        "That gap cost a full day of every chart the fleet wrote: generated pages were changed to "
+        "load their plotting library from a sidecar written once per output directory, which is "
+        "right for a directory served whole and wrong for a deliverable, because a deliverable "
+        "travels -- downloaded on its own, copied elsewhere, attached to a message. Every one of "
+        "them opened as a title, an empty box, and an error in a console nobody has open. The "
+        "replies were true throughout: success, the path, the byte count. The test suites passed "
+        "throughout too, because they asserted the sidecar tag was PRESENT, which is the "
+        "mechanism and not the property. It was found by a person opening one file and looking "
+        "at it. This round opens all of them."
+    ),
+    "main": (
+        "THE MAIN TASK OF THIS PHASE: every time a tool writes a file, open that file afterwards "
+        "and hold it to what the reply claimed. The success flag and the byte count are not "
+        "evidence -- a file of exactly the right size can be empty of the thing you asked for. "
+        "For each artifact check three things and record all three. ONE, IT HOLDS WHAT WAS "
+        "ASKED FOR: count the rows, columns, sheets, slides, paragraphs, charts or series that "
+        "are actually in it and compare that count to the number the reply itself gave. TWO, IT "
+        "STANDS ON ITS OWN: read the file and look for every reference pointing OUT of it -- a "
+        "src= or href= naming another file, a link to a sibling the reader would have to be "
+        "given as well, an absolute path that only exists on the machine that wrote it, a URL "
+        "fetched when the file is opened. Then prove it: copy the file ALONE into a fresh empty "
+        "directory and check it is still complete there. A file that only works while its "
+        "neighbours sit beside it is the defect this round exists to find, and it reports "
+        "success every single time. THREE, IT IS THE TYPE IT CLAIMS: a .csv must parse with the "
+        "row count the reply gave, a workbook or document must open and hold the named sheet or "
+        "heading, an .html that says it drew a chart must contain that chart's own data and not "
+        "merely an empty container for it. Where a tool writes no file, exercise it normally and "
+        "say so in one line -- but if its reply NAMES a path, that path is an artifact and gets "
+        "all three checks. "
+    ),
+    "unit": "call",
+    "columns": (
+        "tool name | file it wrote (or none) | does it hold what the reply claimed? | does it "
+        "reference anything outside itself? | still complete when copied out alone? | notes"
+    ),
+    "columns_ops": (
+        "op name | file it wrote (or none) | does it hold what the reply claimed? | does it "
+        "reference anything outside itself? | notes"
+    ),
+    "fs_extra": {
+        "fsw1": (
+            "This server writes the files the rest of the sweep checks, so hold it to the same "
+            "rule: after every op, read the file back and compare it byte for byte with what you "
+            "asked for. copy and move must leave the content identical -- check that, do not "
+            "assume it. replace_text and insert_after must change the one place they were told "
+            "to and nothing else: read the whole file, not just the edited line."
+        ),
+        "fsw2": (
+            "After every op read the file back and compare it with what you asked for. "
+            "patch_lines and delete_lines must touch only the lines named -- read the whole file "
+            "afterwards and say what else moved. For download, check the file on disk is the "
+            "bytes that were served and not an error page saved under a success flag."
+        ),
+        "fsr1": (
+            "These read files rather than write them, so the check runs the other way: for each "
+            "mode, compare what it reports against what the file actually holds. mode=content "
+            "must return the real bytes -- confirm the length and the last line, not just the "
+            "first. mode=tree must name every file that is really there. diff must describe a "
+            "difference you can see yourself in the two files."
+        ),
+        "fsr2": (
+            "The archive ops are the whole point of this phase for this server. Build the .zip "
+            "and the .tar.gz, then extract each into a FRESH EMPTY directory and compare every "
+            "extracted file byte for byte with its original -- an archive that unpacks into "
+            "something subtly different is exactly the defect this round is about. For fs_index, "
+            "check the index it built actually names the files on disk."
         ),
     },
 }
