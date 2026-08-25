@@ -183,6 +183,68 @@ check "deck bullets under 'items'" "$OFF_BASE/pptx-new/mcp" "$OFF_TOK" create_de
   'success\\?": ?true'
 check_ooxml "  and the bullets are on the slide" "$HOST/d.pptx" 'ppt/slides/slide2.xml' 'VocabCheckGamma'
 
+echo "=== round-14 harness findings: data_analyst ==="
+check "search_columns dtype=float64 filters" "$DATA_BASE/basic/mcp" "$DATA_TOK" search_columns \
+  "{\"file_path\":\"$DIR/rows.csv\",\"dtype\":\"float64\"}" \
+  'matched\\?": ?2'
+check "search_columns dtype=str filters" "$DATA_BASE/basic/mcp" "$DATA_TOK" search_columns \
+  "{\"file_path\":\"$DIR/rows.csv\",\"dtype\":\"str\"}" \
+  '"matched": ?1'
+check "search_columns refuses a bad dtype" "$DATA_BASE/basic/mcp" "$DATA_TOK" search_columns \
+  "{\"file_path\":\"$DIR/rows.csv\",\"dtype\":\"complex128\"}" \
+  'success\\?": ?false.*complex128'
+check "merge matched counts real matches" "$DATA_BASE/transform/mcp" "$DATA_TOK" merge_datasets \
+  "{\"file_path\":\"$DIR/left.csv\",\"right_file_path\":\"$DIR/right.csv\",\"left_on\":\"k\",\"right_on\":\"k\",\"how\":\"left\",\"output_path\":\"$DIR/merged.csv\"}" \
+  'matched\\?": ?2'
+check_file "  and no indicator column leaked" "$HOST/merged.csv" '_merge_side' no
+check "aggregate refuses an arg its mode ignores" "$DATA_BASE/transform/mcp" "$DATA_TOK" aggregate_dataset \
+  "{\"file_path\":\"$DIR/rows.csv\",\"mode\":\"value_counts\",\"row_col\":\"region\"}" \
+  'does not read row_col'
+check "list_patch_ops category=original" "$DATA_BASE/basic/mcp" "$DATA_TOK" list_patch_ops \
+  '{"category":"original"}' 'total_ops\\?": ?13'
+
+echo "=== round-14 harness findings: machine_learning ==="
+check "clip_column reads min/max" "$ML_BASE/medium/mcp" "$ML_TOK" run_preprocessing \
+  "{\"file_path\":\"$DIR/small.csv\",\"ops\":[{\"op\":\"clip_column\",\"column\":\"n\",\"min\":0,\"max\":100}],\"output_path\":\"$DIR/clip.csv\"}" \
+  'success\\?": ?true'
+check_file "  and 900 really became 100" "$HOST/clip.csv" '^c,100' yes
+check "label_encode honours new_column" "$ML_BASE/medium/mcp" "$ML_TOK" run_preprocessing \
+  "{\"file_path\":\"$DIR/small.csv\",\"ops\":[{\"op\":\"label_encode\",\"column\":\"cat\",\"new_column\":\"cat_enc\"}],\"output_path\":\"$DIR/enc.csv\"}" \
+  'success\\?": ?true'
+check_file "  and the new column exists" "$HOST/enc.csv" '^cat,n,cat_enc$' yes
+check_file "  and the source survived" "$HOST/enc.csv" '^a,1,0$' yes
+check "an unlisted log base is refused" "$ML_BASE/medium/mcp" "$ML_TOK" run_preprocessing \
+  "{\"file_path\":\"$DIR/small.csv\",\"ops\":[{\"op\":\"log_transform\",\"column\":\"n\",\"base\":\"log5\"}],\"output_path\":\"$DIR/lg.csv\"}" \
+  'invalid base .log5.'
+check "a misspelled op field is refused" "$ML_BASE/medium/mcp" "$ML_TOK" run_preprocessing \
+  "{\"file_path\":\"$DIR/small.csv\",\"ops\":[{\"op\":\"clip_column\",\"column\":\"n\",\"lowr\":0}],\"output_path\":\"$DIR/x.csv\"}" \
+  'did you mean lower'
+check "dbscan refuses what would kill it" "$ML_BASE/medium/mcp" "$ML_TOK" run_clustering \
+  "{\"file_path\":\"/workspace/data/Ad_Data.csv\",\"feature_columns\":[\"clicks\",\"spends\",\"impressions\"],\"algorithm\":\"dbscan\"}" \
+  'success\\?": ?false.*16,834'
+check "and the server is still answering" "$ML_BASE/medium/mcp" "$ML_TOK" run_clustering \
+  "{\"file_path\":\"/workspace/data/Ad_Data.csv\",\"feature_columns\":[\"clicks\",\"spends\"],\"algorithm\":\"kmeans\",\"n_clusters\":3}" \
+  'success\\?": ?true'
+check "find_optimal_clusters names its features" "$ML_BASE/medium/mcp" "$ML_TOK" find_optimal_clusters \
+  "{\"file_path\":\"/workspace/data/Ad_Data.csv\",\"feature_columns\":[\"clicks\",\"device\",\"spends\"],\"max_k\":3,\"open_after\":false}" \
+  'features_skipped\\?": ?\[[^]]*device'
+
+echo "=== round-14 harness findings: microsoft_office ==="
+check "outline builds the Title Only layout" "$OFF_BASE/pptx-new/mcp" "$OFF_TOK" create_from_outline \
+  "{\"slides\":[{\"title\":\"VocabTitleOnly\",\"content\":\"body\",\"layout\":\"Title Only\"}],\"output_path\":\"$DIR/lay.pptx\"}" \
+  'success\\?": ?true'
+check_ooxml "  and the body is not on the slide" "$HOST/lay.pptx" 'ppt/slides/slide1.xml' 'VocabTitleOnly'
+check "an unknown layout is refused" "$OFF_BASE/pptx-new/mcp" "$OFF_TOK" create_from_outline \
+  "{\"slides\":[{\"title\":\"T\",\"layout\":\"zzz\"}],\"output_path\":\"$DIR/bad.pptx\"}" \
+  'success\\?": ?false.*zzz'
+check "sections doc -> one slide per section" "$OFF_BASE/docx-new/mcp" "$OFF_TOK" create_from_sections \
+  "{\"title\":\"DeckTitle\",\"sections\":[{\"heading\":\"SecAlpha\",\"body\":\"a\"},{\"heading\":\"SecBeta\",\"body\":\"b\"}],\"output_path\":\"$DIR/src.docx\"}" \
+  'success\\?": ?true'
+check "  converted to a deck" "$OFF_BASE/pptx-new/mcp" "$OFF_TOK" create_from_docx \
+  "{\"docx_path\":\"$DIR/src.docx\",\"output_path\":\"$DIR/conv.pptx\"}" \
+  'slide_count\\?": ?3'
+check_ooxml "  and SecBeta has its own slide" "$HOST/conv.pptx" 'ppt/slides/slide3.xml' 'SecBeta'
+
 echo
 echo "=== $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
