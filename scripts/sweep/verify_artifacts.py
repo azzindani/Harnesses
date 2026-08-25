@@ -62,6 +62,40 @@ _INERT_PREFIXES = ("data:", "#", "javascript:", "about:", "mailto:")
 # checked as their own JSON, not as a dependency of the file they sit next to.
 _SIDECAR_SUFFIXES = (".mcp_receipt.json",)
 
+# Ops that copy someone else's bytes rather than author them. The stands-alone
+# rule is about what this fleet WRITES: a page fetched from the web keeps the
+# links its author put in it, and a downloader that rewrote them to look
+# self-contained would be the defect. So these are opened and type-checked like
+# anything else, and exempted from the reference rule only.
+_VERBATIM_OPS = frozenset({"download", "fetch_url", "inbox"})
+
+
+# Where the fleet puts files it fetched rather than made (shared/exchange.py's
+# get_inbox_dir). Nothing in there was authored here, and the fetch path writes
+# no receipt, so the directory is the only provenance available.
+_INBOX_DIRNAME = "inbox"
+
+
+def provenance(path: Path) -> str:
+    """The op that produced this file, from the receipt beside it, or "".
+
+    Reading the sidecar rather than guessing from the extension: `.html` says
+    nothing about whether the fleet composed the page or saved one.
+    """
+    if _INBOX_DIRNAME in path.parts:
+        return "inbox"
+    receipt = path.with_name(path.name + ".mcp_receipt.json")
+    if not receipt.is_file():
+        return ""
+    try:
+        entries = json.loads(receipt.read_text(encoding="utf-8", errors="replace"))
+    except (ValueError, OSError):
+        return ""
+    if not isinstance(entries, list) or not entries:
+        return ""
+    last = entries[-1]
+    return str(last.get("op", "")) if isinstance(last, dict) else ""
+
 
 def external_refs(html: str) -> list[str]:
     markup = _SCRIPT_BODY.sub(r"\1</script>", html)
@@ -71,11 +105,15 @@ def external_refs(html: str) -> list[str]:
 def check_html(path: Path, shots: Path | None, browser) -> dict:
     """Copy the page out alone, render it with the network off, report what drew."""
     text = path.read_text(encoding="utf-8", errors="replace")
+    origin = provenance(path)
+    verbatim = origin in _VERBATIM_OPS
     result: dict = {
         "kind": "html",
         "refs": external_refs(text),
         "divs": text.count('class="plotly-graph-div"'),
     }
+    if verbatim:
+        result["verbatim_from"] = origin
 
     with tempfile.TemporaryDirectory() as tmp:
         alone = Path(tmp) / path.name
@@ -120,9 +158,9 @@ def check_html(path: Path, shots: Path | None, browser) -> dict:
         result["errors"] = errors[:5]
 
     problems = []
-    if result["refs"]:
+    if result["refs"] and not verbatim:
         problems.append(f"needs {len(result['refs'])} file(s)/URL(s) outside itself: {result['refs'][:3]}")
-    if result["blocked"]:
+    if result["blocked"] and not verbatim:
         problems.append(f"fetched {len(result['blocked'])} URL(s) when opened: {result['blocked'][:3]}")
     if result.get("render_error"):
         problems.append(result["render_error"])
@@ -132,7 +170,9 @@ def check_html(path: Path, shots: Path | None, browser) -> dict:
         problems.append(f"{result['drawn']} of {result['divs']} charts drew")
     if not result["divs"] and result.get("text_len", 1) == 0:
         problems.append("page rendered empty")
-    if result["errors"]:
+    if result["errors"] and not verbatim:
+        # A verbatim page's console errors are its author's, and most of them
+        # are just the blocked requests above reported a second time.
         problems.append(f"js error: {result['errors'][0][:90]}")
     result["problems"] = problems
     return result
