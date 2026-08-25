@@ -20,6 +20,7 @@ get() { grep "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2-; }
 DATA_BASE=$(get DATA_MCP_BASE_URL); DATA_TOK=$(get DATA_MCP_TOKEN)
 ML_BASE=$(get ML_MCP_BASE_URL);     ML_TOK=$(get ML_MCP_TOKEN)
 OFF_BASE=$(get OFFICE_MCP_BASE_URL); OFF_TOK=$(get OFFICE_MCP_TOKEN)
+FS_URL=$(get FS_MCP_URL);           FS_TOK=$(get FS_MCP_TOKEN)
 
 DIR=/workspace/data/vocab_verify          # as the containers see it
 HOST=/root/Harnesses/data/vocab_verify    # the same bytes, from here
@@ -90,6 +91,38 @@ check_ooxml() {
     printf 'FAIL  %-46s wanted /%s/ in %s of %s\n' "$label" "$want" "$part" "$path"; FAIL=$((FAIL + 1))
   fi
 }
+
+# --- fixtures -------------------------------------------------------------
+# Written fresh every run. They used to be created by hand in the session that
+# wrote this script, which meant a later run reported 37 failures that were all
+# "File not found" -- a verifier that cannot set up its own inputs verifies
+# nothing on the second day. The containers write as a different uid, so the
+# directory has to be writable by them.
+mkdir -p "$HOST"
+cat > "$HOST/rows.csv" <<'CSV'
+region,spend,clicks
+W0,60,18
+W1,10,3
+W2,80,25
+CSV
+cat > "$HOST/small.csv" <<'CSV'
+cat,n
+a,1
+b,50
+c,900
+CSV
+cat > "$HOST/left.csv" <<'CSV'
+k,v
+1,a
+2,b
+3,c
+CSV
+cat > "$HOST/right.csv" <<'CSV'
+k,w
+1,x
+2,y
+CSV
+chmod -R a+rwX "$HOST" 2>/dev/null
 
 echo "=== data_analyst: the op catalog ==="
 check "list_patch_ops advertises 52" "$DATA_BASE/basic/mcp" "$DATA_TOK" list_patch_ops \
@@ -245,6 +278,53 @@ check "  converted to a deck" "$OFF_BASE/pptx-new/mcp" "$OFF_TOK" create_from_do
   'slide_count\\?": ?3'
 check_ooxml "  and SecBeta has its own slide" "$HOST/conv.pptx" 'ppt/slides/slide3.xml' 'SecBeta'
 
+echo "=== round-14 harness findings: file_system ==="
+# Fixtures are rewritten every run: two of these checks mutate the file they
+# read, so a second run against leftovers would be checking the wrong bytes.
+rm -rf "$HOST/fsv"
+mkdir -p "$HOST/fsv/tree/nested"
+printf 'keepme\n' > "$HOST/fsv/tree/keep.txt"
+printf 'deep\n'   > "$HOST/fsv/tree/nested/deep.txt"
+printf 'first line\nsecond line' > "$HOST/fsv/anchor.txt"   # no final newline
+printf 'a\nb\nc\n' > "$HOST/fsv/patch.txt"
+ln -sfn keep.txt "$HOST/fsv/alink"
+chmod -R a+rwX "$HOST/fsv"
+# The delete gate advertises four op names and used to run two handlers, so the
+# op named for a single file would rmtree a directory. The pair below is the
+# shape worth keeping: ask for the thing that used to be wrong, then ask the
+# same server for the thing that must still work.
+check "a tree cannot be deleted by the file op" "$FS_URL" "$FS_TOK" fs_write \
+  "{\"ops\":[{\"op\":\"delete_request\",\"path\":\"$DIR/fsv/tree\"}]}" \
+  'success\\?": ?false.*delete_tree_request'
+check_file "  and the tree is still there" "$HOST/fsv/tree/keep.txt" 'keepme' yes
+check "a tree request names its own confirm op" "$FS_URL" "$FS_TOK" fs_write \
+  "{\"ops\":[{\"op\":\"delete_tree_request\",\"path\":\"$DIR/fsv/tree\"}]}" \
+  'op=delete_tree_confirm'
+check "  and counts the files inside it" "$FS_URL" "$FS_TOK" fs_write \
+  "{\"ops\":[{\"op\":\"delete_tree_request\",\"path\":\"$DIR/fsv/tree\"}]}" \
+  '2 file\(s\)'
+check "insert_after leaves a line where it anchored" "$FS_URL" "$FS_TOK" fs_write \
+  "{\"ops\":[{\"op\":\"insert_after\",\"path\":\"$DIR/fsv/anchor.txt\",\"after_pattern\":\"second\",\"content\":\"VocabInserted\"}]}" \
+  'total_lines\\?": ?3'
+check_file "  and the anchor was not welded" "$HOST/fsv/anchor.txt" '^second line$' yes
+check_file "  and the insertion is its own line" "$HOST/fsv/anchor.txt" '^VocabInserted$' yes
+check "patch_lines says how many lines it wrote" "$FS_URL" "$FS_TOK" fs_write \
+  "{\"ops\":[{\"op\":\"patch_lines\",\"path\":\"$DIR/fsv/patch.txt\",\"start_line\":0,\"end_line\":1,\"content\":\"P1\\nP2\"}]}" \
+  'lines_written\\?": ?2'
+check "content as a list names the field" "$FS_URL" "$FS_TOK" fs_write \
+  "{\"ops\":[{\"op\":\"write_file\",\"path\":\"$DIR/fsv/x.txt\",\"content\":[\"a\",\"b\"]}]}" \
+  "'content' must be a string, got list"
+check "disk_usage measures the path it was given" "$FS_URL" "$FS_TOK" fs_manage \
+  "{\"action\":\"disk_usage\",\"path\":\"$DIR/fsv\"}" \
+  'path_bytes\\?": ?[0-9]'
+check "the index types a symlink as one" "$FS_URL" "$FS_TOK" fs_index \
+  "{\"action\":\"build\",\"path\":\"$DIR/fsv\"}" \
+  'symlinks\\?": ?1'
+check "  and stats counts files as files" "$FS_URL" "$FS_TOK" fs_index \
+  "{\"action\":\"stats\"}" \
+  'entry_count\\?": ?[0-9]'
+
+echo
 echo
 echo "=== $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
