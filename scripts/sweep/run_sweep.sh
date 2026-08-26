@@ -116,9 +116,11 @@ box_ready() {
 }
 
 # Poll for the tail of the prompt rather than sampling once, and only press
-# Enter when the last characters are on screen.
+# Enter when the last characters are on screen -- then confirm the model
+# actually started, because typing the prompt and submitting it are two
+# different things that fail separately.
 send_prompt() {
-  local text="$1" probe waited
+  local text="$1" probe waited arrived submitted
   probe=$(printf '%s' "$text" | flat | tail -c 20)
   for attempt in 1 2 3; do
     if ! box_ready; then
@@ -128,16 +130,40 @@ send_prompt() {
     fi
     docker exec $C tmux send-keys -t main -l "$text"
     waited=0
+    arrived=0
+    submitted=0
     while [ "$waited" -lt 90 ]; do
       sleep 3; waited=$((waited + 3))
       case "$(docker exec $C tmux capture-pane -p -t main 2>/dev/null | flat)" in
-        *"$probe"*)
-          docker exec $C tmux send-keys -t main Enter
-          echo "    prompt delivered in ${waited}s (attempt $attempt)" | tee -a "$LOG"
-          return 0 ;;
+        *"$probe"*) arrived=1; break ;;
       esac
     done
-    echo "    the prompt never finished arriving in 90s (attempt $attempt) — retyping" | tee -a "$LOG"
+    # One send-keys Enter used to be the whole of "delivered": press it, log
+    # success, return. Nothing checked that the model started. A starved TUI
+    # drops the keystroke, the complete prompt sits in the box, busy() never
+    # sees "esc interrupt", wait_idle returns its ~105s minimum and the phase
+    # writes no report -- which is indistinguishable from a model that refused.
+    # Round 16 died this way at phase 22: three such phases in a row tripped
+    # the DRY guard with the entire prompt still legible on screen. Checking
+    # that the prompt left the box does not work, since a submitted prompt is
+    # still on screen as the conversation's first message; busy() is the
+    # signal, and it turns true within ~5s of a real submit even under load.
+    if [ "$arrived" -eq 1 ]; then
+      for _ in 1 2 3 4 5 6; do
+        docker exec $C tmux send-keys -t main Enter
+        sleep 5
+        if busy; then submitted=1; break; fi
+      done
+    fi
+    if [ "$submitted" -eq 1 ]; then
+      echo "    prompt delivered in ${waited}s (attempt $attempt)" | tee -a "$LOG"
+      return 0
+    fi
+    if [ "$arrived" -eq 1 ]; then
+      echo "    typed in full but would not submit (attempt $attempt) — the session is dropping keys" | tee -a "$LOG"
+    else
+      echo "    the prompt never finished arriving in 90s (attempt $attempt) — retyping" | tee -a "$LOG"
+    fi
     docker exec $C tmux send-keys -t main C-u
     sleep 5
   done
