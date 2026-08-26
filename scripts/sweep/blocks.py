@@ -63,6 +63,13 @@ INCREMENTAL = (
     "file with its header row and that tool's row. After every tool after that, append its row "
     "to the file immediately, before you call the next tool. A report covering six tools is "
     "worth far more than a complete one you never got to write. "
+    "This is a hard precondition, not advice: BEFORE you call the second tool, the report file "
+    "must already exist on disk at the exact path named below, with a header and one row. Check "
+    "that it does. If it does not, stop and write it before doing anything else. Two phases in "
+    "the last round called their tools, wrote their artifacts and verified them, then ran out of "
+    "room before writing any report -- so the work was done and every finding was lost. Do not "
+    "put your findings anywhere else: not in a CSV, not in a scratch file, not in your reply. "
+    "The report file at that path is the only thing that counts as output. "
 )
 
 REPORT = (
