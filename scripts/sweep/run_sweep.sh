@@ -50,17 +50,37 @@ send() {
 # only comparison that survives that.
 flat() { tr -cd 'A-Za-z0-9_'; }
 
-busy() { docker exec $C tmux capture-pane -p -t main 2>/dev/null | grep -q 'esc interrupt'; }
+# A session sitting on a permission dialog is not idle, but it shows no 'esc
+# interrupt' -- so wait_idle called it finished, the driver started retrying,
+# and typed into a box that would never clear. Round 15 lost most of two phases
+# to that before anyone looked at the pane. Blocked counts as busy; blocked_ask
+# below is what tells a person it needs answering.
+blocked_ask() { docker exec $C tmux capture-pane -p -t main 2>/dev/null | grep -q 'Permission required'; }
 
+busy() {
+  docker exec $C tmux capture-pane -p -t main 2>/dev/null | grep -qE 'esc interrupt|Permission required'
+}
+
+# One failed `docker exec` is not a dead session. Under load the exec itself can
+# fail while tmux is perfectly healthy, and the old single-shot check turned
+# that into a container restart -- which really did end the session it was
+# wrongly reporting on. Three tries, half a second apart.
 alive() {
-  docker ps --filter "name=^${C}$" --filter status=running --format '{{.Names}}' | grep -q "^${C}$" \
-    && docker exec $C tmux has-session -t main 2>/dev/null
+  docker ps --filter "name=^${C}$" --filter status=running --format '{{.Names}}' | grep -q "^${C}$" || return 1
+  local i
+  for i in 1 2 3; do
+    docker exec $C tmux has-session -t main 2>/dev/null && return 0
+    sleep 2
+  done
+  return 1
 }
 
 ensure_alive() {
   alive && return 0
   echo "    harness container or tmux session is down — restarting" | tee -a "$LOG"
-  (cd /root/Harnesses && docker compose up -d $C) >/dev/null 2>&1
+  # --no-recreate: without it, compose rebuilds a container whose config it
+  # thinks has drifted, which SIGTERMs a session that may have been fine.
+  (cd /root/Harnesses && docker compose up -d --no-recreate $C) >/dev/null 2>&1
   for _ in $(seq 1 20); do sleep 3; alive && { echo "    session back up" | tee -a "$LOG"; sleep 10; return 0; }; done
   echo "    COULD NOT REVIVE $C — STOPPING" | tee -a "$LOG"
   return 1
@@ -127,8 +147,14 @@ send_prompt() {
 
 wait_idle() {
   sleep 45
-  local max=${1:-200} quiet=0
+  local max=${1:-200} quiet=0 said_blocked=0
   for i in $(seq 1 "$max"); do
+    # Say it once, loudly. A phase parked on a permission prompt used to look
+    # exactly like a phase thinking hard, for as long as the tick budget lasted.
+    if [ "$said_blocked" -eq 0 ] && blocked_ask; then
+      said_blocked=1
+      echo "    WAITING ON A PERMISSION PROMPT — answer it in the session" | tee -a "$LOG"
+    fi
     if busy; then quiet=0; else
       quiet=$((quiet + 1))
       [ "$quiet" -ge "$QUORUM" ] && { echo "    idle after ~$((45 + i * 15))s"; return 0; }
@@ -179,7 +205,15 @@ while IFS=$'\t' read -r num label report ticks count prompt; do
   after=0
   for try in 1 2; do
     [ "$try" -gt 1 ] && echo "    nothing was written — attempt $try" | tee -a "$LOG"
-    send '/new'; sleep 12
+    # /new clears the session, and it does not do so instantly. A fixed sleep
+    # raced it right after a container restart, when opencode is slow to come
+    # up: the prompt was typed, send_prompt saw its own tail on screen and
+    # pressed Enter, then /new completed and wiped it. The phase then looked
+    # like a model that answered nothing. Wait for the session to go quiet and
+    # for the empty box, rather than guessing how long it takes.
+    send '/new'
+    for _ in $(seq 1 20); do sleep 2; busy || break; done
+    box_ready || echo "    the box did not settle after /new" | tee -a "$LOG"
     if ! send_prompt "$lead $prompt"; then
       echo "    the prompt never reached the session" | tee -a "$LOG"
       continue

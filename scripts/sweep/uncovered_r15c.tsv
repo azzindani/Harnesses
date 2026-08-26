@@ -1,0 +1,4 @@
+office-docx-tables	add_table
+office-docx-tables	delete_table
+office-xlsx-basic	set_range
+office-xlsx-formulas	freeze_panes

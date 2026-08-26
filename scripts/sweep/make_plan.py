@@ -30,14 +30,30 @@ MAX_TOOLS = 8
 TICKS = "200"
 
 
-def split(names: list[str]) -> list[list[str]]:
-    if len(names) <= MAX_TOOLS:
+def split(names: list[str], max_tools: int = MAX_TOOLS) -> list[list[str]]:
+    """Chunk into as many parts as it takes, not always two.
+
+    The old version halved once, so a fifteen-tool server became 8 + 7 and
+    never 4 x 4. Round 15's axis -- open every artifact, count what is in it,
+    copy it out alone and re-open it -- costs far more per tool than round 10's,
+    and the Office phases only ever finished when they were small: 5 and 7 tools
+    completed, 7 and 8 came up short. Pass max_tools=4 for a heavy axis.
+    """
+    if len(names) <= max_tools:
         return [names]
-    half = (len(names) + 1) // 2
-    return [names[:half], names[half:]]
+    parts = -(-len(names) // max_tools)  # ceil
+    size = -(-len(names) // parts)  # spread evenly rather than leaving a stub
+    return [names[i : i + size] for i in range(0, len(names), size)]
 
 
-def build(round_no: int, tools_path: Path, fixture: str) -> list[str]:
+def build(
+    round_no: int,
+    tools_path: Path,
+    fixture: str,
+    max_tools: int = MAX_TOOLS,
+    include_fs: bool = True,
+    report_prefix: str = "report_",
+) -> list[str]:
     axis = AXES[round_no]
 
     by_server: OrderedDict[str, list[str]] = OrderedDict()
@@ -52,8 +68,9 @@ def build(round_no: int, tools_path: Path, fixture: str) -> list[str]:
 
     chunks = []
     for server, names in by_server.items():
-        for i, part in enumerate(split(names), start=1):
-            multi = len(split(names)) > 1
+        parts = split(names, max_tools)
+        for i, part in enumerate(parts, start=1):
+            multi = len(parts) > 1
             suffix = f", part {i}" if multi else ""
             slug = server.replace("-", "_") + (f"_{i}" if multi else "")
             body = (
@@ -61,12 +78,17 @@ def build(round_no: int, tools_path: Path, fixture: str) -> list[str]:
                 "Give each one a real call with arguments that make sense for "
                 f"/workspace/data/{fixture} or for a file you created earlier in this phase."
             )
-            chunks.append((f"{server}{suffix}", slug, f"report_{slug}.md", len(part), body, part))
+            # The scratch slug stays the server's own, so a re-run still finds
+            # the documents and workbooks earlier phases built. Only the report
+            # filename takes the prefix -- the driver rm -f's its report before
+            # each phase, and reusing a name would delete rows already collected.
+            chunks.append((f"{server}{suffix}", slug, f"{report_prefix}{slug}.md", len(part), body, part))
 
     fs = []
-    for label, slug, report, count, body in FS_PHASES:
-        extra = axis["fs_extra"].get(slug, "")
-        fs.append((label, slug, report, count, f"{body} {extra}".strip(), None))
+    if include_fs:
+        for label, slug, report, count, body in FS_PHASES:
+            extra = axis["fs_extra"].get(slug, "")
+            fs.append((label, slug, report, count, f"{body} {extra}".strip(), None))
 
     rows = fs + chunks
     total = len(rows)
@@ -95,12 +117,22 @@ def main() -> None:
     ap.add_argument("--tools", type=Path, required=True)
     ap.add_argument("--out", type=Path)
     ap.add_argument("--fixture", default="Ad_Data.csv")
+    ap.add_argument("--max-tools", type=int, default=MAX_TOOLS, help="tools per phase; use 4 for a heavy axis")
+    ap.add_argument("--no-fs", action="store_true", help="skip the filesystem phases (already covered)")
+    ap.add_argument("--report-prefix", default="report_", help="prefix for report filenames; change it to avoid overwriting an existing round's reports")
     args = ap.parse_args()
 
     if args.round not in AXES:
         raise SystemExit(f"no axis for round {args.round} -- add one to {here / 'axes.py'}")
 
-    rows = build(args.round, args.tools, args.fixture)
+    rows = build(
+        args.round,
+        args.tools,
+        args.fixture,
+        max_tools=args.max_tools,
+        include_fs=not args.no_fs,
+        report_prefix=args.report_prefix,
+    )
     dst = args.out or here / f"phases_r{args.round}.tsv"
     dst.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
@@ -110,8 +142,10 @@ def main() -> None:
     for line in rows:
         f = line.split("\t")
         print(f"  {f[0]:>2}  {f[1]:<34} {f[4]:>2} tools  -> {f[2]}")
-    generated = sum(int(line.split("\t")[4]) for line in rows[len(FS_PHASES) :])
-    print(f"\n{generated} tools in the generated phases + {sum(r[3] for r in FS_PHASES)} filesystem ops")
+    n_fs = 0 if args.no_fs else len(FS_PHASES)
+    generated = sum(int(line.split("\t")[4]) for line in rows[n_fs:])
+    fs_ops = 0 if args.no_fs else sum(r[3] for r in FS_PHASES)
+    print(f"\n{generated} tools in the generated phases + {fs_ops} filesystem ops")
 
 
 if __name__ == "__main__":
