@@ -357,3 +357,24 @@ AXES[15] = {
 #   two clients       the same file touched by two servers in one phase --
 #                     data-basic writes it, office-xlsx reads it. Every round so
 #                     far has stayed inside one server per phase.
+
+
+# Round 16 re-runs round 15's axis over the whole fleet, against deployed code
+# rather than the code that was live when round 15 ran.
+#
+# Round 15 found 27 defects and every one of them was fixed, tested and pushed
+# while the round was still going -- so its own later phases were measuring a
+# build that no longer existed, and its earlier ones a build that had already
+# been corrected by the end. That is fine for finding defects and useless as a
+# statement about the fleet's current state. This one runs start to finish
+# against one build, with every fix deployed, so a clean phase means something.
+#
+# Same lens, deliberately: opening the artifact is what found all 27, and the
+# fixes changed what the tools SAY about what they wrote (counts, samples,
+# addresses, disclosures) -- which is exactly what this axis checks. A new axis
+# would be a different question, and this one has not been answered yet.
+#
+# Run it at --max-tools 4. Round 15 proved 7-8 tools per phase is too many for
+# this axis: Office phases completed at 3-4 and came up short at 7-8.
+AXES[16] = dict(AXES[15])
+AXES[16]["name"] = "open the file it wrote (re-run on deployed fixes)"

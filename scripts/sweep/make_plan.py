@@ -88,7 +88,13 @@ def build(
     if include_fs:
         for label, slug, report, count, body in FS_PHASES:
             extra = axis["fs_extra"].get(slug, "")
-            fs.append((label, slug, report, count, f"{body} {extra}".strip(), None))
+            # FS_PHASES carries its report names hardcoded, so --report-prefix
+            # used to apply to the generated phases and silently miss these
+            # four. A round-16 plan then pointed at report_fs_write_1.md and
+            # friends -- the files round 15 had already written -- and the
+            # driver rm -f's its report before each phase, so generating the
+            # plan was one command away from destroying four finished reports.
+            fs.append((label, slug, report.replace("report_", report_prefix, 1), count, f"{body} {extra}".strip(), None))
 
     rows = fs + chunks
     total = len(rows)
