@@ -60,6 +60,15 @@ jobs:
           cd scripts/sweep && python3 make_plan.py --round 11 --tools tools_r11.tsv --out /tmp/p.tsv
           grep -q '{' /tmp/p.tsv && { echo "unsubstituted placeholder in the plan"; exit 1; } || true
 
+      - name: sweep driver unit tests
+        run: |
+          # The driver's row counter decides whether a phase gets retried and
+          # whether the round aborts, and it was wrong for a whole round: it
+          # only understood one of the two table styles models write, so ten
+          # complete reports read as empty. Offline and container-free; the
+          # real-corpus case skips itself where the reports are not on disk.
+          scripts/sweep/test_count_rows.sh
+
       - name: gitleaks (secret scan)
         uses: gitleaks/gitleaks-action@v2
         env:
