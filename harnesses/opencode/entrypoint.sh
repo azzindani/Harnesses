@@ -16,6 +16,23 @@ import json, os
 
 config = {
     "$schema": "https://opencode.ai/config.json",
+    # An unattended sweep cannot answer a permission dialog, and a blocked
+    # session is indistinguishable from a slow one until the phase times out.
+    # Round 16 lost phase 57 to "△ Permission required — Access external
+    # directory /tmp/xlsx_check/xl/charts": the model had unzipped a workbook to
+    # /tmp to read the raw chart XML, which is precisely the verification the
+    # round asks for, and the harness stopped it to ask.
+    #
+    # Scoped rather than blanket-allowed. /tmp is where the models extract
+    # archives and /workspace is the material under test; anything else still
+    # asks, so this does not quietly hand the model the whole filesystem.
+    "permission": {
+        "external_directory": {
+            "/tmp/**": "allow",
+            "/workspace/**": "allow",
+            "*": "ask",
+        },
+    },
 }
 
 # OPENCODE_MODEL names a model opencode already knows -- one of the entries in
