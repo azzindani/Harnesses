@@ -24,5 +24,15 @@ __pycache__/
 
 # Generated sweep artifacts: the plan is rebuilt from axes.py + a live
 # tools/list, and the log is per-run.
+#
+# These are globs, not the two exact names they started as. LOG defaults to
+# sweep.log but every real round overrides it to keep the rounds apart
+# (LOG=.../sweep_r16.log), and the tool inventory is written next to the plan
+# as tools_rNN.tsv. Both were generated, neither was ignored, and round 16 left
+# six such files sitting untracked-but-committable — the same near-miss the
+# .env.bak note above records, from the same cause: an ignore rule written
+# against one filename instead of the shape the tooling actually produces.
 scripts/sweep/phases_r*.tsv
-scripts/sweep/sweep.log
+scripts/sweep/tools_r*.tsv
+scripts/sweep/sweep*.log
+scripts/sweep/*.nohup
