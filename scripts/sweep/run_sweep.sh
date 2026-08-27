@@ -94,21 +94,66 @@ ensure_alive() {
 # prompt, and the prompt contains the word being looked for. The first version of
 # this check matched its own question and reported a dead provider as healthy,
 # which is precisely the failure it exists to catch.
-provider_ok() {
+#
+# Each probe carries its own nonce word. Retrying with the same word would count
+# the FIRST attempt's question -- still on screen -- toward the second attempt's
+# total, so the check would pass on a provider that never answered: exactly the
+# failure the ">= 2" exists to prevent, reintroduced by the retry.
+_probe() {
+  local word="$1"
   docker exec $C tmux send-keys -t main C-u; sleep 2
-  send 'Reply with exactly the word PONG and nothing else.'
+  send "Reply with exactly the word $word and nothing else."
   for _ in $(seq 1 20); do
     sleep 4
     busy || break
   done
   local seen
-  seen=$(docker exec $C tmux capture-pane -p -t main | grep -oi 'pong' | wc -l)
+  seen=$(docker exec $C tmux capture-pane -p -t main | grep -oi "$word" | wc -l)
   [ "$seen" -ge 2 ]
 }
 
+# A modal dialog holding focus swallows every keystroke, and the pane then looks
+# exactly like a provider that answered nothing -- same symptom, opposite fix.
+# Round 16 lost 20 consecutive launches and about nine hours to an opencode
+# "Status / 23 MCP Servers" dialog that a container recreate left open: each
+# probe typed into the dialog, `busy` never saw `esc interrupt`, and the driver
+# blamed the provider every time. The provider was answering in 167ms.
+#
+# So a failed probe is no longer conclusive. Dismiss whatever holds focus and
+# probe once more before declaring the provider dead.
+#
+# The nonce carries this run's PID, so it is unique per launch and not just per
+# probe. A fixed word would be counted off the *previous* launch's pane: the
+# supervisor relaunches the driver every couple of minutes, and in the failure
+# this guard exists to catch nothing scrolls, so last launch's question and
+# answer sit there ready to be miscounted as this one's. That reads as a healthy
+# provider precisely when the provider is dead.
+provider_ok() {
+  local tag="PONG${$: -4}"
+  _probe "${tag}A" && return 0
+  echo "    no answer — dismissing anything holding focus and retrying" | tee -a "$LOG"
+  docker exec $C tmux send-keys -t main Escape; sleep 3
+  if _probe "${tag}B"; then
+    echo "    a dialog had focus; dismissed, and the provider is answering" | tee -a "$LOG"
+    return 0
+  fi
+  return 1
+}
+
+# A modal with focus hides the input box completely and swallows C-u, so this
+# used to spin out all 15 tries and report "the input box will not clear" -- a
+# message about a box too full, for a box that was not even on screen. That
+# fires before send_prompt types anything, so send_prompt's own dialog recovery
+# never got a chance to run; a test that opened the ctrl+p palette and expected
+# recovery caught it failing here instead.
+#
+# One Escape per iteration dismisses whatever is on top. It is safe: this is
+# only called when the session is idle, and with nothing on top Escape at worst
+# clears the input, which is what C-u is doing anyway.
 box_ready() {
   for _ in $(seq 1 15); do
     docker exec $C tmux capture-pane -p -t main 2>/dev/null | grep -q 'Ask anything' && return 0
+    docker exec $C tmux send-keys -t main Escape 2>/dev/null
     docker exec $C tmux send-keys -t main C-u 2>/dev/null
     sleep 2
   done
@@ -132,7 +177,20 @@ send_prompt() {
     waited=0
     arrived=0
     submitted=0
-    while [ "$waited" -lt 90 ]; do
+    # ARRIVAL_WINDOW was 90s, chosen when a prompt took ~33s to appear at about
+    # 100 chars/sec. It no longer does. Measured across round 16's own log: 68
+    # successful deliveries with a **median of 78s** and a maximum of 90 -- eight
+    # of them landing on the ceiling exactly -- against **37 failures to arrive**.
+    # Half of every prompt was finishing within twelve seconds of the timeout, so
+    # any jitter dropped the phase, and the driver then blamed load, the
+    # provider, or a dropped keystroke depending on which branch it hit. The
+    # window was the bug in all of them.
+    #
+    # Throughput roughly halved (~45 chars/sec now); more MCP servers and a newer
+    # TUI are both plausible and neither is worth chasing while the fix is a
+    # number. 240s leaves real margin without letting a genuinely wedged session
+    # sit for long -- box_ready and the submit check still bound the rest.
+    while [ "$waited" -lt "${ARRIVAL_WINDOW:-240}" ]; do
       sleep 3; waited=$((waited + 3))
       case "$(docker exec $C tmux capture-pane -p -t main 2>/dev/null | flat)" in
         *"$probe"*) arrived=1; break ;;
@@ -155,14 +213,54 @@ send_prompt() {
         if busy; then submitted=1; break; fi
       done
     fi
+    # Three different faults produce the identical picture here -- a complete
+    # prompt sitting in the box that will not go -- and they need opposite
+    # responses, so the log has to say which:
+    #
+    #   the container is gone   `docker exec` fails silently, busy() is false,
+    #                           and nothing above notices. Needs a restart, and
+    #                           reporting it as a keystroke problem sent me
+    #                           hunting a healthy provider for hours.
+    #   a modal has focus       a dialog swallows Enter. Needs one Escape.
+    #                           Round 16 lost 20 launches and ~9 hours to an
+    #                           unnoticed "Status / 23 MCP Servers" dialog,
+    #                           blamed on the provider every single time.
+    #   the box is starved      the TUI cannot process the keystroke. Only
+    #                           waiting fixes it.
+    #
+    # Escape is safe to send with a prompt in the box: worst case it clears the
+    # input, and the next attempt retypes from scratch anyway.
+    if [ "$arrived" -eq 1 ] && [ "$submitted" -eq 0 ]; then
+      if ! alive; then
+        echo "    the harness session is gone (attempt $attempt) — not a dropped keystroke" | tee -a "$LOG"
+        ensure_alive || return 1
+      else
+        docker exec $C tmux send-keys -t main Escape
+        sleep 3
+        for _ in 1 2 3; do
+          docker exec $C tmux send-keys -t main Enter
+          sleep 5
+          if busy; then submitted=1; break; fi
+        done
+        [ "$submitted" -eq 1 ] &&
+          echo "    a dialog had focus; dismissed it and the prompt went (attempt $attempt)" | tee -a "$LOG"
+      fi
+    fi
     if [ "$submitted" -eq 1 ]; then
       echo "    prompt delivered in ${waited}s (attempt $attempt)" | tee -a "$LOG"
       return 0
     fi
+    # State what was checked, not what it must therefore be. The previous
+    # wording ended "so the box is starved (load N)" and printed that at load
+    # 2.28 on an idle box -- asserting a cause the evidence contradicted, which
+    # is worse than saying nothing. Liveness and the dialog really were ruled
+    # out above; load is a number the reader can weigh.
     if [ "$arrived" -eq 1 ]; then
-      echo "    typed in full but would not submit (attempt $attempt) — the session is dropping keys" | tee -a "$LOG"
+      echo "    typed in full but would not submit (attempt $attempt) — session alive, dialog ruled out," \
+        "load $(cut -d' ' -f1 /proc/loadavg)" | tee -a "$LOG"
     else
-      echo "    the prompt never finished arriving in 90s (attempt $attempt) — retyping" | tee -a "$LOG"
+      echo "    the prompt never finished arriving in ${ARRIVAL_WINDOW:-240}s (attempt $attempt) — retyping" |
+        tee -a "$LOG"
     fi
     docker exec $C tmux send-keys -t main C-u
     sleep 5
@@ -198,8 +296,10 @@ ensure_alive || exit 1
 if provider_ok; then
   echo "provider answering" | tee -a "$LOG"
 else
-  echo "PROVIDER RETURNED NOTHING TO A ONE-WORD PROMPT — not starting the round" | tee -a "$LOG"
+  echo "NO ANSWER TO A ONE-WORD PROMPT, TWICE — not starting the round" | tee -a "$LOG"
   echo "(every phase would write an empty report that looks like a model refusing)" | tee -a "$LOG"
+  echo "(an Escape was sent between the two, so a dialog holding focus is ruled out;" | tee -a "$LOG"
+  echo " look at the pane before blaming the model — quota exhaustion reads the same)" | tee -a "$LOG"
   exit 2
 fi
 
