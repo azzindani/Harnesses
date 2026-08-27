@@ -378,3 +378,110 @@ AXES[15] = {
 # this axis: Office phases completed at 3-4 and came up short at 7-8.
 AXES[16] = dict(AXES[15])
 AXES[16]["name"] = "open the file it wrote (re-run on deployed fixes)"
+
+
+# Round 17 -- the "two clients" candidate above, finally run.
+#
+# Sixteen rounds have stayed inside one server per phase. So every defect in the
+# HANDOVER between two servers has been structurally invisible: the sweep has
+# never once taken the path one server returned and given it to another.
+#
+# This is the direct successor to round 16 rather than a change of subject.
+# Round 16's best finding was that a writer and its own sibling reader share an
+# assumption, so a round-trip through one server is self-consistent and still
+# wrong -- set_cell stored "16833" as a string, read_cell returned 16833, and
+# every same-server check passed. Round 16 caught it because a HUMAN opened the
+# file with openpyxl. Round 17 replaces the human with a second server, which is
+# what actually happens in production: an LLM chains data-basic -> office-xlsx
+# and has only the first tool's reply to go on.
+#
+# The four servers share /root/Harnesses/data at /workspace/data, verified
+# 2026-08-27 on all of mcp-office, mcp-data-analyst, mcp-ml and
+# mcp-filesystem-fs-basic. So a handover is physically possible and any failure
+# is a real defect, not a mount that was never there.
+#
+# The phase's own tools stay the writers, and the reader is pulled in from
+# another server, so each named tool still owns a row and check_coverage /
+# strict_coverage keep working unchanged.
+#
+# Run it at --max-tools 4, same as 16: this axis costs MORE per tool than
+# round 16 (two servers per artifact instead of one), so do not go wider.
+AXES[17] = {
+    "name": "hand the file to a different server",
+    "why": (
+        "Every round so far has judged a tool against itself or against its own siblings. A "
+        "writer and its sibling reader share an assumption, so the round-trip agrees and is "
+        "still wrong -- round 16's set_cell wrote the number 16833 as TEXT, read_cell read it "
+        "back as 16833, and only a third party (openpyxl's data_type, or Excel summing the "
+        "column to 0) could see it. The production case is a chain: one server writes, another "
+        "reads, and the model driving them has nothing but the first reply to go on. This round "
+        "makes the second reader a different server."
+    ),
+    "main": (
+        "THE MAIN TASK OF THIS PHASE: every artifact a listed tool writes must then be READ BY A "
+        "TOOL ON A DIFFERENT SERVER, and the two readings compared. Writing to /workspace/data "
+        "makes the file visible to every server, so this is always possible; if you think it is "
+        "not, say which server could not see the path rather than skipping the check. "
+        "For each artifact record four things. ONE, THE PATH SURVIVES: take the path EXACTLY as "
+        "the writing tool returned it -- do not tidy it, do not swap a public_url for a local "
+        "path, do not add or change a directory -- and give that literal string to the reading "
+        "tool on the other server. If the reader rejects it, that is the finding: record the "
+        "path as returned, the reader's exact error, and what you had to change to make it work. "
+        "A caller has only the first reply to go on, so any edit the handover required is a "
+        "defect however small. TWO, BOTH SERVERS SEE THE SAME DATA: compare the row and column "
+        "counts the two servers report, and pick at least one NUMERIC column and one TEXT column "
+        "and check the actual values agree. Numbers are where this breaks -- a number stored as "
+        "text, an integer that came back 0.0, a rounded decimal, a date turned into a serial "
+        "number. State the values you compared, not just that they matched. THREE, THE TYPES "
+        "AGREE: where a reader reports a column type, dtype or cell type, say whether it is the "
+        "type the writer claimed to store. A column of numbers that the second server reads as "
+        "text is exactly this round's defect and BOTH tools will report success. FOUR, IT "
+        "SURVIVES THE ROUND TRIP: hand it back -- have the second server write the data out "
+        "again and the first server read that -- and say what changed between the original and "
+        "the final file. Where a tool writes no file, pass its OUTPUT to a tool on another "
+        "server that should consume it (a column list, a model id, a set of statistics) and "
+        "apply the same four checks to that handover. "
+    ),
+    "unit": "handover",
+    "columns": (
+        "tool name | file or output it produced | reader tool on the OTHER server | did the "
+        "reader accept the path exactly as returned? | same counts, values and types on both "
+        "sides? | what the caller had to change | notes"
+    ),
+    "columns_ops": (
+        "op name | file or output it produced | reader tool on the OTHER server | did the reader "
+        "accept the path exactly as returned? | same counts, values and types both sides? | notes"
+    ),
+    "fs_extra": {
+        "fsw1": (
+            "This server is the universal second client -- it can read anything the others write "
+            "-- so run this phase BOTH ways. First write a file with these ops and have a domain "
+            "server read it (a .csv to data-basic load_dataset, for instance). Then take a file "
+            "one of the domain servers wrote earlier and read it back with fs_read, comparing "
+            "byte for byte against what that server said it contained. copy and move must not "
+            "change a file another server can still open: after each, have the owning server "
+            "re-read it."
+        ),
+        "fsw2": (
+            "Run this phase both ways as well. patch_lines and delete_lines on a .csv that a "
+            "data server is using: after the edit, have that server re-load the file and say "
+            "whether its row count moved by exactly the number of lines you touched. For "
+            "download, hand the downloaded file to the server that should own that file type "
+            "and check it opens as that type rather than as a saved error page."
+        ),
+        "fsr1": (
+            "These read rather than write, so they ARE the second client. For each mode, read a "
+            "file that another server wrote and compare what fs reports against what the writing "
+            "server claimed: mode=content against the writer's byte count, mode=tree against the "
+            "list of files the writer said it produced. diff two files written by two different "
+            "servers from the same data and describe what differs."
+        ),
+        "fsr2": (
+            "Archive files written by OTHER servers -- a workbook from office, a chart from "
+            "data-visual -- then extract into a fresh empty directory and have the ORIGINAL "
+            "server re-open the extracted copy. An archive that unpacks into something its own "
+            "server can no longer read is this round's defect in its clearest form. For "
+            "fs_index, check the index names the files those other servers actually wrote."
+        ),
+    },
+}
