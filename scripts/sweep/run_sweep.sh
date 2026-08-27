@@ -288,6 +288,36 @@ wait_idle() {
   echo "    TIMED OUT"; return 1
 }
 
+# How many table lines a report holds, header included -- the caller subtracts
+# one. Two separate faults lived in the one-liner this replaces
+# (`grep -c '^| ' f 2>/dev/null || echo 0`):
+#
+#   only one table style   Models write the rows both as `| tool | ... |` and as
+#                          `tool | ... `, and anchoring on a leading pipe sees
+#                          only the first. Ten of round 16's 66 reports were in
+#                          the second style, every one of them complete and
+#                          correct. Each cost its phase a SECOND full attempt
+#                          redoing work already done, logged "nothing was
+#                          written", and counted toward the three-in-a-row
+#                          abort -- so a round could have been stopped dead by
+#                          three good reports in a row.
+#
+#   grep -c exits 1 on 0   It prints "0" AND returns non-zero, so `|| echo 0`
+#                          appended a second line and the variable became
+#                          "0\n0". That is not an integer: `[ "$after" -gt 1 ]`
+#                          failed with "integer expression expected" and the
+#                          `rows:` arithmetic died with it, which is why the
+#                          rows line simply vanished from the log for exactly
+#                          those phases rather than printing a wrong number.
+#
+# Match a line carrying at least two pipes after an optional leading one, then
+# drop markdown separator rows (|---|---|), which are decoration and would
+# inflate the count by one for any model that writes them.
+count_rows() {
+  grep -E '^[[:space:]]*\|?[^|]*\|[^|]*\|' "$1" 2>/dev/null |
+    grep -cvE '^[[:space:]|:*-]+$'
+}
+
 DRY=0   # consecutive phases that wrote nothing
 
 echo "SWEEP $(basename "$PLAN") $(date -u +%FT%TZ) — phases $SEL" | tee -a "$LOG"
@@ -310,7 +340,7 @@ while IFS=$'\t' read -r num label report ticks count prompt; do
     *) case "$WANTED" in *",$num,"*) ;; *) continue ;; esac ;;
   esac
 
-  before=$(grep -c '^| ' "$DATA/$report" 2>/dev/null || echo 0)
+  before=$(count_rows "$DATA/$report")
   {
     echo "=========================================================="
     echo "PHASE $num — $label   ($count tools)  had $before rows  [$(date -u +%H:%M:%SZ)]"
@@ -345,7 +375,7 @@ while IFS=$'\t' read -r num label report ticks count prompt; do
       continue
     fi
     wait_idle "$ticks" | tee -a "$LOG"
-    after=$(grep -c '^| ' "$DATA/$report" 2>/dev/null || echo 0)
+    after=$(count_rows "$DATA/$report")
     [ "$after" -gt 1 ] && break
     ensure_alive || exit 1
   done

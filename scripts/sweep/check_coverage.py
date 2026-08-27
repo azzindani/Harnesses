@@ -31,18 +31,31 @@ import sys
 # The plan's closing sentence, written by blocks.REPORT.
 _NAMED = re.compile(r"tools to call in this phase: (.+?)\.\s*$")
 
-# A table row that is not the header and not the |---|---| separator.
-_HEADER = re.compile(r"^\|\s*(tool|op)\b", re.I)
+# A table row that is not the header and not the |---|---| separator. The
+# leading pipe is optional: models write the table both ways.
+_HEADER = re.compile(r"^\|?\s*(tool|op)\b", re.I)
 
 
 def body_rows(text: str) -> list[str]:
+    """Table rows, excluding the header and the |---|---| separator.
+
+    Accepts both styles a model writes -- "| tool | ... |" and "tool | ... ".
+    Requiring the leading pipe made ten of round 16's 66 reports look rowless
+    while every one of them was complete; the driver carried the same
+    assumption and read them as "nothing was written", so each cost its phase
+    a second full attempt and fed the three-in-a-row abort.
+
+    This column is reporting only -- the verdict below is whether a named tool
+    appears in the text at all -- so widening it re-opens no phase.
+    """
     rows = []
     for line in text.splitlines():
-        if not line.startswith("| "):
+        stripped = line.strip()
+        if stripped.count("|") < 2:
             continue
-        if set(line) <= set("|- :"):
+        if set(stripped) <= set("|- :"):
             continue
-        if _HEADER.match(line):
+        if _HEADER.match(stripped):
             continue
         rows.append(line)
     return rows
