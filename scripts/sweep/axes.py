@@ -485,3 +485,113 @@ AXES[17] = {
         ),
     },
 }
+
+
+# Round 18 -- do what the hint told you to do.
+#
+# Every tool in the fleet returns a `hint` on failure. CLAUDE.md makes it a
+# contract ("must name a specific tool or fix, never 'Invalid input.'"), and it
+# is the field an LLM actually acts on: the error explains, the hint is the
+# instruction. Seventeen rounds have read hints and none has ever FOLLOWED one.
+#
+# The evidence that this is worth a round is that every time a hint has been
+# checked in passing, it was wrong -- and each was found by accident while
+# chasing something else:
+#
+#   e7ec243  read_document on a .mcp_versions path: the error named the
+#            timestamp route, the hint said "Check that file_path is a valid
+#            .docx file". The file IS a valid .docx. The hint argued the caller
+#            out of the answer the error had just given them.
+#   e7ec243  every PermissionError answered "is open in Word, Excel or
+#            PowerPoint" -- a Windows file-lock answer given to a Linux
+#            ownership problem. A round-15 phase was told to close an
+#            application that was not running and retried into the same error.
+#   (r16)    every "Sheet 'X' not found" said "Use list_sheets to get available
+#            sheet names" -- a second call to learn something the workbook
+#            already open in front of it knew.
+#
+# Three for three, in a field nobody has ever swept. A hint that names a
+# specific WRONG fix is worse than a vague one, because the caller acts on it.
+#
+# This is the cheapest axis since round 13: two calls per tool (make it fail,
+# then do exactly what it said) and no artifact to open. It is also the first
+# round to judge a tool by its RECOVERY rather than its success, which is the
+# path a model actually spends its time on -- models get arguments wrong
+# constantly, and the hint is the whole of the fleet's answer to that.
+AXES[18] = {
+    "name": "do what the hint told you to do",
+    "why": (
+        "Every tool returns a hint on failure and the standards make it a contract: name a "
+        "specific tool or fix, never 'Invalid input.' It is the field an LLM acts on -- the "
+        "error explains, the hint instructs. Seventeen rounds have READ hints and none has "
+        "FOLLOWED one. Every time a hint has been checked in passing it was wrong: a valid "
+        ".docx called invalid, a Linux ownership error answered with 'close Excel', a sheet "
+        "name answered with a second call to learn what was already on screen. A hint naming a "
+        "specific wrong fix is worse than a vague one, because the caller obeys it."
+    ),
+    "main": (
+        "THE MAIN TASK OF THIS PHASE: make each tool FAIL, then do EXACTLY what its hint tells "
+        "you to do, and report whether that worked. Two calls per tool, minimum. "
+        "FIRST, make it fail in a way a careful caller would plausibly fail: a column or sheet "
+        "or slide that does not exist, a file path that does not exist, a value of the wrong "
+        "type, a required argument omitted, an op or format name that is close to a real one. "
+        "Do NOT invent nonsense arguments -- the point is a realistic mistake, not garbage. Say "
+        "exactly what you called and what came back. "
+        "SECOND, READ THE HINT AND OBEY IT LITERALLY. If it names a tool, call that tool. If it "
+        "names a parameter or value, use it. If it says 'use X to get Y', do that and then "
+        "retry the original call with what you got. Do not use your own knowledge to fix the "
+        "call -- follow the hint and only the hint, because that is what a model with no other "
+        "information would do. Then say whether the retry SUCCEEDED. "
+        "Record four judgements per tool. ONE, IS THE HINT ACTIONABLE: does it name a specific "
+        "tool, parameter, value or command, or is it a generic 'check your input' that tells "
+        "you nothing you did not know? TWO, IS IT TRUE: does the thing it names actually exist "
+        "and actually apply -- a tool that is really there, a parameter really accepted, a "
+        "cause that is really the cause? A hint naming a tool or argument that does not exist "
+        "is this round's clearest defect. THREE, DID FOLLOWING IT WORK: after doing exactly "
+        "what it said, did the call succeed? If it did not, quote what you did and the second "
+        "error. FOUR, DOES IT CONTRADICT THE ERROR ABOVE IT: if the error already said what to "
+        "do, does the hint agree, or does it send you somewhere else? Also flag a hint that "
+        "asks for a call whose answer the tool already had -- being told to list the sheets of "
+        "a workbook the tool has open is a round trip the response should have saved you. "
+        "Where a tool cannot be made to fail at all, say so and record what you tried."
+    ),
+    "unit": "recovery",
+    "columns": (
+        "tool name | the realistic mistake you made | the error | the hint, quoted | what you "
+        "did to obey it | did the retry succeed? | notes"
+    ),
+    "columns_ops": (
+        "op name | the realistic mistake you made | the hint, quoted | what you did to obey it | "
+        "did the retry succeed? | notes"
+    ),
+    "fs_extra": {
+        "fsw1": (
+            "Write ops fail in ways with real consequences, so check the hint does not send you "
+            "somewhere destructive. For create_dir and write_file try a path whose parent does "
+            "not exist; for copy and move try a destination that already exists and a source "
+            "that does not. If a hint suggests overwriting or deleting to recover, say so "
+            "plainly -- a hint that recommends data loss as the fix is a finding on its own."
+        ),
+        "fsw2": (
+            "For delete_request and delete_tree_request, deliberately reuse a spent token and "
+            "obey whatever the refusal tells you to do next. For patch_lines and delete_lines "
+            "use a line number past the end of the file. For set_permissions use a mode string "
+            "in the wrong format, and for download a URL that returns an error page rather than "
+            "a file -- then check whether the hint tells you the download failed at all."
+        ),
+        "fsr1": (
+            "Read ops are where a wrong hint costs least to obey, so obey every one exactly. "
+            "Give fs_read a directory where it wants a file, a mode name that does not exist, "
+            "and mode=diff with only one path. Give fs_query a pattern that matches nothing and "
+            "a root that does not exist. A hint that answers 'no matches' with advice about the "
+            "pattern when the ROOT was wrong is the defect to watch for."
+        ),
+        "fsr2": (
+            "For fs_archive try extracting a file that is not an archive and creating an archive "
+            "of a path that does not exist. For fs_index query before building the index at all "
+            "-- the hint should tell you to build it first, and following that hint should then "
+            "make the query work. For fs_manage use an action name that does not exist and check "
+            "whether the hint lists the actions that do."
+        ),
+    },
+}
