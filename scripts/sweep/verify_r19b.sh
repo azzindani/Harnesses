@@ -81,6 +81,9 @@ bad_()  { printf 'FAIL  %s\n      got: %.240s\n' "$1" "$2"; FAIL=$((FAIL + 1)); 
 
 want()  { local v; v=$(field "$2" "$3" "$4" "$5" "$6"); grep -qE "$7" <<<"$v" && ok_ "$1" || bad_ "$1" "$v"; }
 deny()  { local v; v=$(field "$2" "$3" "$4" "$5" "$6"); grep -qE "$7" <<<"$v" && bad_ "$1" "$v" || ok_ "$1"; }
+# `absent` rather than deny '.': a JSON null comes back through print() as the
+# four-character string "None", which any presence test reads as a value.
+absent() { local v; v=$(field "$2" "$3" "$4" "$5" "$6"); case "$v" in ""|None|null) ok_ "$1";; *) bad_ "$1" "$v";; esac; }
 
 rm -rf "$HOST"; mkdir -p "$HOST"; chgrp 999 "$HOST" 2>/dev/null; chmod g+w "$HOST"
 
@@ -94,7 +97,10 @@ call "$XB" "$OFF_TOK" sort_sheet "{\"file_path\":\"$DIR/s.xlsx\",\"sheet_name\":
 # Read the FILE back, not the response -- the old bug reported success:true.
 AFTER=$(call "$XB" "$OFF_TOK" read_cell_range \
   "{\"file_path\":\"$DIR/s.xlsx\",\"sheet_name\":\"Data\",\"range_address\":\"A1:B5\"}")
-if grep -q '"cell": "A2"[^}]*' <<<"$AFTER" && python3 - "$AFTER" <<'PY'
+# No grep on the envelope: its `text` field is a JSON *string*, so every inner
+# quote arrives backslash-escaped and a pattern written against the pretty-printed
+# form silently never matches. Parse it.
+if python3 - "$AFTER" <<'PY'
 import json, sys
 env = json.loads(sys.argv[1])
 rows = json.loads(env["result"]["content"][0]["text"])["data"]
@@ -115,8 +121,8 @@ echo
 echo "=== the response no longer contradicts itself about a snapshot ==="
 want "set_cell A0 still says nothing was written" "$XB" "$OFF_TOK" set_cell \
   "{\"file_path\":\"$DIR/s.xlsx\",\"sheet_name\":\"Data\",\"cell_address\":\"A0\",\"value\":\"x\"}" hint 'Nothing was written'
-deny "…and no longer advertises a backup" "$XB" "$OFF_TOK" set_cell \
-  "{\"file_path\":\"$DIR/s.xlsx\",\"sheet_name\":\"Data\",\"cell_address\":\"A0\",\"value\":\"x\"}" backup '.'
+absent "…and no longer advertises a backup" "$XB" "$OFF_TOK" set_cell \
+  "{\"file_path\":\"$DIR/s.xlsx\",\"sheet_name\":\"Data\",\"cell_address\":\"A0\",\"value\":\"x\"}" backup
 # The disk is the real check: three failed calls used to leave three .bak files.
 BEFORE_BAKS=$(ls "$HOST/.mcp_versions"/*.bak 2>/dev/null | wc -l)
 for addr in A0 B0 C0; do

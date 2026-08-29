@@ -140,6 +140,19 @@ readable image.
   response.
 - `duplicate_slide`, `add_image_to_all_slides` — correct once given valid input.
 
+## Ported to the one sibling that shared it
+
+Data_Analyst had the same snapshot-on-failure defect at 18 sites, confirmed live:
+
+    apply_patch(ops=[{"op": "log_transform", "column": "name"}])   # text column
+      -> "applied": 0, "backup": ".mcp_versions/d_...csv.bak",
+         "hint": "... Call restore_version() if you want to reset to the snapshot."
+
+The comment three lines above that return reads "Do NOT write the modified df --
+leave the original intact". `discard_snapshot_if_unchanged` has been in that repo
+since round 11, wired only into the paths that succeed. ML and File_System have no
+failure return that carries a backup, so the port stops there. Commit `3d339d6`.
+
 ## Fixture
 
 `/root/Harnesses/data/Ad_Data.csv` md5 `9a16b9248526466960194df4eb7a3e90` before
