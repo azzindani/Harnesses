@@ -9,7 +9,7 @@ mkdir -p /root/.config/opencode
 #   FOLIO_MCP_URL / FOLIO_MCP_TOKEN -> "folio" (auth header, only if BOTH set)
 #   WEB_MCP_URL                     -> "web"   (no auth, only if set)
 #   MATH/BROWSER/FS_MCP_URL+TOKEN   -> "math"/"browser"/"filesystem"
-#   ML/DATA/OFFICE_MCP_BASE_URL+TOKEN -> "<repo>-<sub-server>" per sub-server
+#   ML/DATA/OFFICE/DOCS_MCP_BASE_URL+TOKEN -> "<repo>-<sub-server>" per sub-server
 #   MCP_DISABLED                    -> comma-separated names to leave out
 python3 - <<'PY'
 import json, os
@@ -121,6 +121,7 @@ _multi = [
      ["docx-basic", "docx-tables", "docx-layout", "docx-new",
       "xlsx-basic", "xlsx-formulas", "xlsx-charts", "xlsx-new",
       "pptx-basic", "pptx-design", "pptx-new"]),
+    ("docs", "DOCS_MCP_BASE_URL", "DOCS_MCP_TOKEN", ["read", "edit"]),
 ]
 for prefix, base_var, token_var, subs in _multi:
     base = os.environ.get(base_var, "").strip()

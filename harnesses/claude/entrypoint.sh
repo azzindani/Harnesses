@@ -112,6 +112,11 @@ if [ -n "$OFFICE_MCP_BASE_URL" ] && [ -n "$OFFICE_MCP_TOKEN" ]; then
         _mcp_register "office-$s" "$OFFICE_MCP_BASE_URL/$s/mcp" "$OFFICE_MCP_TOKEN"
     done
 fi
+if [ -n "$DOCS_MCP_BASE_URL" ] && [ -n "$DOCS_MCP_TOKEN" ]; then
+    for s in read edit; do
+        _mcp_register "docs-$s" "$DOCS_MCP_BASE_URL/$s/mcp" "$DOCS_MCP_TOKEN"
+    done
+fi
 
 # Pre-accept the first-run dialogs (onboarding, "trust this folder", and the
 # Bypass Permissions warning) so a freshly-recreated container drops straight

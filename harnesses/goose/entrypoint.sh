@@ -114,6 +114,7 @@ _multi = [
      ["docx-basic", "docx-tables", "docx-layout", "docx-new",
       "xlsx-basic", "xlsx-formulas", "xlsx-charts", "xlsx-new",
       "pptx-basic", "pptx-design", "pptx-new"]),
+    ("docs", "DOCS_MCP_BASE_URL", "DOCS_MCP_TOKEN", ["read", "edit"]),
 ]
 for prefix, base_var, token_var, subs in _multi:
     base = os.environ.get(base_var, "").strip()

@@ -73,6 +73,11 @@ if [ -n "$OFFICE_MCP_BASE_URL" ] && [ -n "$OFFICE_MCP_TOKEN" ]; then
         { printf '\n[mcp_servers.office-%s]\n' "$s"; printf 'url = "%s/%s/mcp"\n' "$OFFICE_MCP_BASE_URL" "$s"; printf 'bearer_token_env_var = "OFFICE_MCP_TOKEN"\n'; } >> "$CONFIG_FILE"
     done
 fi
+if [ -n "$DOCS_MCP_BASE_URL" ] && [ -n "$DOCS_MCP_TOKEN" ]; then
+    for s in read edit; do
+        { printf '\n[mcp_servers.docs-%s]\n' "$s"; printf 'url = "%s/%s/mcp"\n' "$DOCS_MCP_BASE_URL" "$s"; printf 'bearer_token_env_var = "DOCS_MCP_TOKEN"\n'; } >> "$CONFIG_FILE"
+    done
+fi
 
 tmux new-session -d -s main -c /workspace
 tmux send-keys -t main "codex --model ${MODEL_NAME}" Enter

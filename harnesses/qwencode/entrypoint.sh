@@ -78,6 +78,11 @@ if [ -n "${OFFICE_MCP_BASE_URL}" ] && [ -n "${OFFICE_MCP_TOKEN}" ]; then
     qwen mcp add "office-$s" "${OFFICE_MCP_BASE_URL}/$s/mcp" -t http -H "Authorization: Bearer ${OFFICE_MCP_TOKEN}" >/dev/null 2>&1 || true
   done
 fi
+if [ -n "${DOCS_MCP_BASE_URL}" ] && [ -n "${DOCS_MCP_TOKEN}" ]; then
+  for s in read edit; do
+    qwen mcp add "docs-$s" "${DOCS_MCP_BASE_URL}/$s/mcp" -t http -H "Authorization: Bearer ${DOCS_MCP_TOKEN}" >/dev/null 2>&1 || true
+  done
+fi
 
 tmux new-session -d -s main -c /workspace
 tmux send-keys -t main "qwen -m ${MODEL_NAME}" Enter
