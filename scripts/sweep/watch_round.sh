@@ -3,6 +3,15 @@
 #
 #     setsid nohup ./watch_round.sh 22 <driver-pid> >> watch_r22.log 2>&1 </dev/null &
 #
+# A round restarted onto a second driver log -- a provider running out of quota
+# mid-round is the usual reason -- names every log after the pid, oldest first:
+#
+#     setsid nohup ./watch_round.sh 22 <pid> sweep_r22.log sweep_r22b.log ...
+#
+# The LAST one named is the one watched for the round's end, because that is
+# the one the live driver is writing; all of them are passed to the ledger, so
+# the phases the first driver finished keep their verdicts.
+#
 # Must be launched with setsid, exactly like run_sweep.sh: a Claude Code
 # background task gets reaped mid-round with nothing in any log to explain it,
 # which is how the first attempt at this died eleven minutes in.
@@ -18,9 +27,14 @@
 #                 alive -- wrong in the opposite direction, and silently.
 set -uo pipefail
 SP="$(cd "$(dirname "$0")" && pwd)"
-ROUND=${1:?usage: watch_round.sh <round> <driver-pid>}
-DPID=${2:?usage: watch_round.sh <round> <driver-pid>}
-LOG="$SP/sweep_r${ROUND}.log"
+ROUND=${1:?usage: watch_round.sh <round> <driver-pid> [log ...]}
+DPID=${2:?usage: watch_round.sh <round> <driver-pid> [log ...]}
+shift 2
+LOGS=("$@")
+[ ${#LOGS[@]} -eq 0 ] && LOGS=("sweep_r${ROUND}.log")
+LOG="$SP/${LOGS[-1]}"
+LEDGER_ARGS=()
+for name in "${LOGS[@]}"; do LEDGER_ARGS+=(--log "$name"); done
 EVERY=${EVERY:-300}
 # 108 x 5 min = 9 hours. A bound, not a schedule: the round ends this loop long
 # before it, and nothing here should outlive the round it is reporting on. One
@@ -28,7 +42,7 @@ EVERY=${EVERY:-300}
 MAX=${MAX:-108}
 
 for i in $(seq 1 "$MAX"); do
-  python3 "$SP/ledger_update.py" --round "$ROUND" || true
+  python3 "$SP/ledger_update.py" --round "$ROUND" "${LEDGER_ARGS[@]}" || true
   if grep -qE 'SWEEP COMPLETE|WROTE NOTHING — STOPPING|FIXTURE MUTATED|not starting the round' "$LOG" 2>/dev/null; then
     echo "round $ROUND ended (log says so) after $i checks"
     break
@@ -40,6 +54,6 @@ for i in $(seq 1 "$MAX"); do
   sleep "$EVERY"
 done
 
-python3 "$SP/ledger_update.py" --round "$ROUND"
+python3 "$SP/ledger_update.py" --round "$ROUND" "${LEDGER_ARGS[@]}"
 echo "--- final log tail ---"
 tail -30 "$LOG"
