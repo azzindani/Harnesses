@@ -166,5 +166,43 @@ The BBCA filing and its XBRL oracle are committed to the repo, so both defects
 are now guarded on every push by a real 183-page document rather than by a
 fixture built to have the property.
 
-**Round 3:** `optimize`, the `basis` audit across non-PDF formats, and
-`probe.page_size` on a multi-geometry document.
+**Round 3:** `optimize` and `probe.page_size` on a multi-geometry document.
+
+## Addendum — phase 15 closed, by adding two formats rather than auditing
+
+Phase 15 (`basis` honesty across formats) was left PARTIAL above. It was closed
+straight afterwards, and not by going looking for it: the user asked why `.zip`
+and `.xbrl` were not supported, given the round had just used an XBRL as its
+oracle through a hand-written script. Adding them cost **no tools** — the whole
+point of `core/ir.py` is that a format costs one reader — and the new reader
+walked straight into the defect the audit was supposed to find.
+
+An XBRL instance is the one format here whose figures are *not* reconstructed:
+the filer writes them into machine-readable fields, so its reader answers
+`native`. `probe` reported `text_layer`.
+
+**It was never about XBRL.** All twelve non-PDF formats already set `native` and
+all twelve were reported as `text_layer`. Four tools each hardcoded the value,
+each differently:
+
+| tool | what it did |
+|---|---|
+| `probe` | `"text_layer" if digital else "empty"` |
+| `extract` | the same expression, independently |
+| `find` | the literal `"text_layer"`, always |
+| `extract_tables` | `"ruled" if all ruled else "whitespace"` — it knew two values |
+
+`extract_tables` is the bad one. A table a format *declares* fell into the else
+branch and was summarised as `whitespace` — the **lowest** confidence in the
+vocabulary, on the one kind of table involving no inference — while the tables
+inside that same response carried `basis: "native", confidence: 1.0`. The
+summary contradicted its own contents.
+
+Fixed with one shared `core.ir.weakest_basis()`: a response covering many items
+makes one claim about all of them, so it reports the weakest, never a constant
+and never the strongest. 25 tests fail without it.
+
+Worth keeping as a technique: **adding a case to a system is a better audit
+than auditing it.** Phase 15 was on the list for two rounds and found nothing;
+a fourteenth format found it in one call, because a new case has to travel every
+path the old ones do and has no accumulated tolerance for being described wrong.
