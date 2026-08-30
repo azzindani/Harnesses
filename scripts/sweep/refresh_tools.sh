@@ -21,6 +21,8 @@ DATA_BASE=$(get DATA_MCP_BASE_URL); DATA_TOK=$(get DATA_MCP_TOKEN)
 ML_BASE=$(get ML_MCP_BASE_URL);     ML_TOK=$(get ML_MCP_TOKEN)
 OFF_BASE=$(get OFFICE_MCP_BASE_URL); OFF_TOK=$(get OFFICE_MCP_TOKEN)
 FS_URL=$(get FS_MCP_URL);           FS_TOK=$(get FS_MCP_TOKEN)
+MATH_URL=$(get MATH_MCP_URL);       MATH_TOK=$(get MATH_MCP_TOKEN)
+BROW_URL=$(get BROWSER_MCP_URL);    BROW_TOK=$(get BROWSER_MCP_TOKEN)
 
 FAILED=0
 
@@ -79,6 +81,12 @@ for m in basic ingest medium statistics transform visual workspace; do
   emit "data-$m" "$DATA_BASE/$m/mcp" "$DATA_TOK"
 done
 emit "filesystem" "$FS_URL" "$FS_TOK"
+# math and browser were dropped from the harness for rounds 18-21 (1 and 0
+# defects in five rounds each) and are back for round 22: both moved to Python
+# 3.14 and the official SDK with everyone else, so both are in scope for an
+# axis about what that migration left behind.
+emit "math" "$MATH_URL" "$MATH_TOK"
+emit "browser" "$BROW_URL" "$BROW_TOK"
 for m in basic medium advanced; do
   emit "ml-$m" "$ML_BASE/$m/mcp" "$ML_TOK"
 done
