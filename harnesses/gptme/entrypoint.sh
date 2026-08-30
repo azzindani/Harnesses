@@ -93,6 +93,11 @@ if [ -n "${OFFICE_MCP_BASE_URL}" ] && [ -n "${OFFICE_MCP_TOKEN}" ]; then
     _gptme_mcp "office-$s" "${OFFICE_MCP_BASE_URL}/$s/mcp" "${OFFICE_MCP_TOKEN}"
   done
 fi
+if [ -n "${DOCS_MCP_BASE_URL}" ] && [ -n "${DOCS_MCP_TOKEN}" ]; then
+  for s in read edit; do
+    _gptme_mcp "docs-$s" "${DOCS_MCP_BASE_URL}/$s/mcp" "${DOCS_MCP_TOKEN}"
+  done
+fi
 
 tmux new-session -d -s main -c /workspace
 tmux send-keys -t main "gptme --model lab/${MODEL_NAME}" Enter
