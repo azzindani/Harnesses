@@ -595,3 +595,110 @@ AXES[18] = {
         ),
     },
 }
+
+
+# Round 22. Rounds 20 and 21 established that the tools ANSWER -- 207 calls, one
+# defect -- and that what is left is whether the answer is right. This round
+# narrows that to a specific cause: between rounds 21 and 22 all six repos moved
+# from Python 3.12 to 3.14 and from third-party fastmcp 2.x to the official MCP
+# SDK, in one week. CI proves every tool still answers; the e2e job proves the
+# transport, the auth and one real call per tool. None of that can see a value
+# that changed SHAPE in the move -- a float that now arrives as a string, a NaN
+# where JSON has no token for one, a warning or an object repr that leaked into a
+# field because a library started emitting it. Math and Web_Browser are back in
+# the harness for this round: both migrated with the others, and browser's
+# five-round zero is partly that a success-checking sweep dismisses all 13 of its
+# tools for answering `ok`.
+AXES[22] = {
+    "name": "the answer as data, after the runtime moved",
+    "why": (
+        "A migration does not break tools loudly. It breaks the edges of values: json.dumps "
+        "writing a bare NaN that no conformant parser accepts, numpy scalars reaching a "
+        "response as numpy.float64(0.83), a DeprecationWarning text captured into a field, a "
+        "default argument evaluated at a different time under PEP 649. Every one of those "
+        "returns success: true and reads correctly to a human. Sixteen rounds have judged "
+        "responses as prose -- is the number right, is the hint useful. None has judged one as "
+        "DATA: is every field a type a non-Python client can read. The fleet's own history says "
+        "this is where it hides: read_column_stats returned \"mean\": Infinity, which "
+        "round-trips perfectly through Python and breaks every JS or Go client, and only a "
+        "second server disagreeing ever surfaced it."
+    ),
+    "main": (
+        "THE MAIN TASK OF THIS PHASE: call each tool for real, then read its RESPONSE AS DATA "
+        "rather than as prose, and report whether that data is still well formed. These servers "
+        "changed Python version and MCP library at once. That every tool still answers is "
+        "already proven -- what is not proven is that the VALUE it answers with survived. "
+        "Check five things on every response, and quote the exact offending text when one fails. "
+        "ONE, NUMBERS: every number must be a real JSON number. A number delivered as a quoted "
+        "string, or as NaN, Infinity, -Infinity, nan, inf or null where a number was promised, "
+        "is a finding -- those are not valid JSON and a non-Python client cannot read them. "
+        "TWO, LEAKS: no field may carry a Python object repr (anything like <... object at "
+        "0x...>), a type wrapped round a value (numpy.float64(...), Timestamp(...), "
+        "PosixPath(...), dtype(...)), a traceback fragment (Traceback, File \"...\", line N), or "
+        "any warning text (DeprecationWarning, FutureWarning, RuntimeWarning, \"is deprecated\"). "
+        "Those are the fingerprints a runtime change leaves. "
+        "THREE, THE ENVELOPE: success, op and token_estimate must be present on EVERY response, "
+        "failures as well as successes. Say which are missing. "
+        "FOUR, EMPTINESS: a field the tool's own description promises that comes back missing, "
+        "null, [] or {} on a call that plainly should have produced something counts the same as "
+        "a wrong value. \"No results\" and \"no changes\" are claims -- check them against what "
+        "you know is there. "
+        "FIVE, for at least THREE tools in this phase RECOMPUTE one number a second way and "
+        "compare it digit for digit. A right-looking number that is wrong is worth more than "
+        "every well-formed one. "
+        "Also call ONE tool in this phase TWICE with byte-identical arguments and diff the two "
+        "responses. Anything that differs and is not a timestamp, a duration or a generated "
+        "filename is a finding: library defaults moved in this migration, and a value that "
+        "changes between two identical calls is the tell. "
+        "Not every server here takes a data file: arithmetic tools take an expression or a "
+        "formula, browser tools take a URL -- use https://example.com/ for those. And one "
+        "server answers ok instead of success and carries no op or token_estimate. If that is "
+        "the shape of EVERY response from that server, record it ONCE as that server's contract "
+        "and judge its other fields on their own terms, rather than reporting a dozen tools as "
+        "each missing a field."
+    ),
+    "unit": "response",
+    "columns": (
+        "tool name | what you called | are all numbers real JSON numbers? | anything leaked "
+        "(repr / type wrapper / traceback / warning / NaN / Infinity)? | success, op and "
+        "token_estimate present? | cross-check: what you recomputed and did it match | notes"
+    ),
+    "columns_ops": (
+        "op name | what you called | are all numbers real JSON numbers? | anything leaked "
+        "(repr / traceback / warning / NaN / Infinity)? | success, op and token_estimate "
+        "present? | cross-check | notes"
+    ),
+    "fs_extra": {
+        "fsw1": (
+            "Every one of these ops reports what it did -- a byte count, a line count, a path. "
+            "Check each of those numbers against the file itself with fs_read, and check the "
+            "path it echoes back is the path you passed, not a rewritten or repr'd one. A size "
+            "that rounds to 0 KB for a file that is not empty, a line count off by one, and a "
+            "path printed as PosixPath(...) are each a finding here."
+        ),
+        "fsw2": (
+            "set_permissions must report the mode actually set -- read it back with fs_manage "
+            "action permissions and compare the two strings. download must report the real byte "
+            "count of what it fetched; use https://example.com/ as the url. The delete_*_request "
+            "ops return a token: carry it to the matching confirm, then reuse the spent token "
+            "once, which must be refused -- and check that refusal is still a well-formed "
+            "response carrying success, op and token_estimate, not a bare string or a raised "
+            "exception."
+        ),
+        "fsr1": (
+            "fs_read mode=meta reports a size and an mtime: compare both against fs_manage for "
+            "the same path. mode=content must return the bytes the file really holds, so compare "
+            "a checksum rather than eyeballing it. fs_query reports a count and a truncated "
+            "flag -- count the results it actually lists and check the number agrees, and check "
+            "truncated reflects whether another file MATCHED, not whether files were left "
+            "unscanned."
+        ),
+        "fsr2": (
+            "fs_index action stats prints counts: check each against what action list actually "
+            "returns. fs_archive create must report the real member count and size -- open the "
+            "archive and count them. After extract, compare the extracted files to the originals "
+            "byte for byte. fs_manage action disk_usage returns numbers in some unit: check the "
+            "unit is stated and that a small file does not round to zero."
+        ),
+    },
+}
