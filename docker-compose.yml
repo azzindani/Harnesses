@@ -297,6 +297,43 @@ services:
       # harness is affected; unset, nothing changes.
       OPENCODE_MODEL: ${OPENCODE_MODEL:-}
 
+  # The SWEEP's own opencode. Same image and entrypoint as harness-opencode, but
+  # its own container and its own state dir -- so the operator's paid opencode
+  # subscription, which lives in harness-opencode's opencode.db, can never be
+  # spent by a 44-phase coverage sweep.
+  #
+  # OPENCODE_MODEL is pinned EMPTY here, and `environment:` beats `env_file:`,
+  # so this container always builds the `lab` provider from PROVIDER_*/
+  # MODEL_NAME (the OpenRouter route) no matter what .env says. That one line is
+  # the whole separation: set OPENCODE_MODEL in .env for the personal harness
+  # and the sweep does not follow it.
+  #
+  # Deliberately NOT added to HARNESSES in auth/server.py: _harness_type_of
+  # returns None for an unknown type, so the idle sweep never stops it (a
+  # stopped container mid-round loses the tmux session and the phase), and it
+  # needs no token and no subdomain. The driver reaches it with docker exec +
+  # tmux, which is how it has always worked.
+  harness-sweep:
+    build: ./harnesses/opencode
+    image: harness-opencode:latest
+    container_name: harness-sweep
+    restart: unless-stopped
+    init: true
+    env_file: .env
+    volumes:
+      - ./project:/workspace
+      - ./data:/workspace/data
+      - ./history/sweep/state:/root/.local/share/opencode
+      - ./history/sweep/hist:/root/.local/state/opencode
+      - ./harnesses/base/tmux.conf:/root/.tmux.conf:ro
+      - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
+    environment:
+      <<: *openai-env
+      MODEL_NAME: ${MODEL_NAME}
+      OPENCODE_MODEL: ""
+    networks:
+      - harnesses_net
+
   harness-crush:
     <<: *harness-defaults
     build: ./harnesses/crush

@@ -25,7 +25,11 @@
 #                      dataset every later phase measures against is worse than
 #                      no sweep.
 set -uo pipefail
-C=harness-opencode
+# The sweep drives its OWN opencode container, not the operator's. harness-sweep
+# pins OPENCODE_MODEL empty in compose, so it always talks to the OpenRouter
+# `lab` route and can never spend a paid opencode subscription. Override with
+# SWEEP_CONTAINER=harness-opencode to go back to the shared one.
+C=${SWEEP_CONTAINER:-harness-sweep}
 SP="$(cd "$(dirname "$0")" && pwd)"
 DATA=${DATA:-/root/Harnesses/data}
 PLAN=${PLAN:-$SP/phases_r12.tsv}
