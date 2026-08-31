@@ -20,7 +20,7 @@ reports `report_r23_*.md`.
 | ledger | `LEDGER_r23.md`, 44 rows, `ledger_update.py` verified against it |
 | data | `/root/Harnesses/data` wiped to `.gitkeep` (462 entries, 2.6 GB, freed 1 GB of a 90%-full disk). 258 reports from rounds 14–22 plus both r22 backup dirs archived to `archive/reports_r14_r22.tar.gz` first. |
 | fixtures | `Ad_Data.csv` restored from the pristine copy, md5 `9a16b9248526466960194df4eb7a3e90`, 16,834 rows. `BBCA_filing.pdf` staged and **verified through the deployed docs server**: 183 pages, 1 scanned, `pages_that_fit_one_response: 8`. |
-| provider | `.env` — `OPENCODE_MODEL` commented out, so the harness builds the `lab` provider from `PROVIDER_BASE_URL` + `MODEL_NAME` = OpenRouter → `nvidia/nemotron-3-super-120b-a12b:free`. `FREE_FALLBACK=0`, `IDLE_EXEMPT=opencode`, `MCP_DISABLED=folio` (so docs is registered; harness-opencode already lists all 27 servers). Backup at `.env.bak.r22final`. |
+| provider | `.env` — `OPENCODE_MODEL` commented out, so the harness builds the `lab` provider from `PROVIDER_BASE_URL` + `MODEL_NAME` = OpenRouter → `nvidia/nemotron-3-super-120b-a12b:free`. `FREE_FALLBACK=0`, `IDLE_EXEMPT=opencode`, `MCP_DISABLED=folio` (so docs is registered; harness-sweep already lists all 27 servers). Backup at `.env.bak.r22final`. |
 | lint | shellcheck, `py_compile`, `ruff --select=E,F` all clean — the three gates Harnesses CI runs |
 
 **Prompts are longer this round**: median 6,622 chars against round 22's 5,825,
@@ -34,33 +34,36 @@ ran at.
 
 ```sh
 df -h /                                             # was 89% after the cleanup
-docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'mcp-|math|harness-opencode'
+docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'mcp-|math|harness-sweep'
 md5sum /root/Harnesses/data/Ad_Data.csv             # 9a16b9248526466960194df4eb7a3e90
 ls /root/Harnesses/data                             # .gitkeep, Ad_Data.csv, BBCA_filing.pdf and nothing else
-docker stats --no-stream harness-opencode           # idle CPU should be ~14%, not ~55%
+docker stats --no-stream harness-sweep           # idle CPU should be ~14%, not ~55%
 ```
 
 A starved TUI reads exactly like a dead provider. If idle CPU is high,
-`docker restart harness-opencode` before starting, not after nine phases.
+`docker restart harness-sweep` before starting, not after nine phases.
 
-## 2. Put the model on OpenRouter — the one manual step
+## 2. Check the model — usually nothing to do now
 
-`.env` is already right, but the container is still running the OpenCode Zen
-model round 22 ended on, and **`--model` does not reliably switch a resumed
-session** (measured both ways: it took once and did not take twice).
+The sweep runs in its **own container**, `harness-sweep`, whose compose block
+pins `OPENCODE_MODEL: ""`. `environment:` beats `env_file:`, so it always builds
+the `lab` provider from `PROVIDER_*`/`MODEL_NAME` — the OpenRouter route —
+whatever `.env` says. That is what keeps a 44-phase sweep off the operator's
+paid opencode subscription, which lives in `harness-opencode`'s own
+`opencode.db`.
 
-```sh
-cd /root/Harnesses && docker compose up -d --force-recreate harness-opencode
-```
+Confirmed at build time: `model = lab/nvidia/nemotron-3-super-120b-a12b:free`,
+one provider block (`lab`), 27 MCP servers, an empty `opencode.db` of its own.
 
-Then, in the TUI (ttyd on 7681, or `docker exec -it harness-opencode tmux attach -t main`):
+If you ever need to move it, **`--model` does not reliably switch a resumed
+session** (measured both ways: it took once and did not take twice). In the TUI (ttyd on 7681, or `docker exec -it harness-sweep tmux attach -t main`):
 
 * `/models`, filter for `nemotron-3-super`, Enter.
 * **Confirm in the log, not the footer** — the footer showed the old name on a
   new reply:
 
 ```sh
-docker exec harness-opencode sh -c \
+docker exec harness-sweep sh -c \
   'tail -n 200 /root/.local/share/opencode/log/opencode.log' | grep -io 'nemotron[^ "]*' | sort | uniq -c
 ```
 
@@ -102,11 +105,11 @@ Three causes, in the order they cost time:
 
 1. **A modal has focus.** opencode's "Status / N MCP Servers" dialog swallows
    text and Enter alike and reads exactly like a dead provider — 20 launches and
-   ~9 idle hours once. `docker exec harness-opencode tmux send-keys -t main Escape`.
+   ~9 idle hours once. `docker exec harness-sweep tmux send-keys -t main Escape`.
 2. **OpenRouter's quota is gone, silently.** Nothing on screen, ever. The only
    evidence:
    ```sh
-   docker exec harness-opencode sh -c \
+   docker exec harness-sweep sh -c \
      'tail -n 500 /root/.local/share/opencode/log/opencode.log' | grep -i 'rate limit'
    ```
    Recovery is to uncomment `OPENCODE_MODEL` in `.env` with one of OpenCode
