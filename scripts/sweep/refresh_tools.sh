@@ -23,6 +23,7 @@ OFF_BASE=$(get OFFICE_MCP_BASE_URL); OFF_TOK=$(get OFFICE_MCP_TOKEN)
 FS_URL=$(get FS_MCP_URL);           FS_TOK=$(get FS_MCP_TOKEN)
 MATH_URL=$(get MATH_MCP_URL);       MATH_TOK=$(get MATH_MCP_TOKEN)
 BROW_URL=$(get BROWSER_MCP_URL);    BROW_TOK=$(get BROWSER_MCP_TOKEN)
+DOCS_BASE=$(get DOCS_MCP_BASE_URL); DOCS_TOK=$(get DOCS_MCP_TOKEN)
 
 FAILED=0
 
@@ -77,6 +78,12 @@ emit() {
   printf '%s\n' "$names" | while read -r t; do [ -n "$t" ] && printf '%s\t%s\n' "$label" "$t"; done
 }
 
+# Documents leads the file, and therefore the plan. It is the seventh repo and
+# the only one no sweep has ever reached, so it must not be what a provider's
+# daily quota runs out before: round 22 died on phase 33 of 42.
+for m in read edit; do
+  emit "docs-$m" "$DOCS_BASE/$m/mcp" "$DOCS_TOK"
+done
 for m in basic ingest medium statistics transform visual workspace; do
   emit "data-$m" "$DATA_BASE/$m/mcp" "$DATA_TOK"
 done
