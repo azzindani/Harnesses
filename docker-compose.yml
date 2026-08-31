@@ -31,7 +31,41 @@ x-harness-defaults: &harness-defaults
 
 # All vars come from .env via env_file; the anchors below just rename them
 # into the conventional SDK env names per protocol family.
+# Secrets that reach every harness ONLY as a side effect of `env_file: .env`,
+# blanked here because no harness entrypoint reads any of them (grep says so).
+# `environment:` wins over `env_file:` per variable, so listing them empty is
+# what keeps them out of the container.
+#
+# Why it matters: an agent is a program that runs model-written code, and it
+# can read its own environment. JWT_SECRET is the signing key for every harness
+# session -- with it an agent mints a valid cookie for ANY harness and for the
+# files browser, no token needed. The TOKEN_* below are those cookies ready
+# made. Measured 2026-08-31: `docker exec harness-opencode env` returned
+# JWT_SECRET plus all twelve. It is NOT a path to host root (no docker.sock in
+# any harness, not privileged, and the auth service only ever get/start/exec's
+# container names from a fixed whitelist) -- it is lateral movement across
+# every other agent container, which is bad enough.
+#
+# The MCP_* tokens and PROVIDER_API_KEY deliberately STAY: the entrypoint needs
+# them to register the tool servers and to reach the model. Those are the
+# credentials the agent is supposed to hold.
+x-no-harness-secrets: &no-harness-secrets
+  JWT_SECRET: ""
+  TOKEN_CLAUDE: ""
+  TOKEN_AIDER: ""
+  TOKEN_OPENCODE: ""
+  TOKEN_CRUSH: ""
+  TOKEN_GPTME: ""
+  TOKEN_GOOSE: ""
+  TOKEN_PLANDEX: ""
+  TOKEN_QWENCODE: ""
+  TOKEN_CODEX: ""
+  TOKEN_PI: ""
+  TOKEN_DROID: ""
+  TOKEN_FILES: ""
+
 x-anthropic-env: &anthropic-env
+  <<: *no-harness-secrets
   # Route via the auth service's /anthropic proxy: it injects
   # reasoning.exclude=true so OpenRouter doesn't return thinking blocks
   # (which Claude Code's content accumulator handles incorrectly).
@@ -49,6 +83,7 @@ x-anthropic-env: &anthropic-env
   CLAUDE_CODE_SUBAGENT_MODEL: ${MODEL_NAME}
 
 x-openai-env: &openai-env
+  <<: *no-harness-secrets
   # Route OpenAI-protocol harnesses through the auth-service proxy so they get
   # (a) a free-only, self-updating /v1/models catalog in their pickers and
   # (b) automatic fallback across free models on rate-limit / deprecation.
@@ -181,15 +216,31 @@ services:
     image: sigoden/dufs:latest
     container_name: harness-files
     restart: unless-stopped
+    # Read-only, with --allow-search as the only extra. This was --allow-all,
+    # which is not "serve everything" -- it grants upload, delete, archive AND
+    # symlink-follow. Measured over the container's whole log before changing
+    # it: 546 GETs, and the only five non-GET requests ever were two write
+    # TESTS (2026-08-11, 2026-08-31). Nothing in the fleet uploads over HTTP
+    # either -- shared/exchange.py's attach_public_url only builds a download
+    # URL string, and every MCP server writes through its own rw bind mount as
+    # uid 999. So the write surface was never used, and it cost this: any
+    # harness session cookie could PUT and DELETE into ./project, which is
+    # /workspace in every harness container and holds the AGENTS.md and
+    # CLAUDE.md the agents read as instructions. That is instruction injection,
+    # not just file exposure.
     command:
       - --bind=0.0.0.0
       - --port=7681
-      - --allow-all
+      - --allow-search
       - /srv
+    # :ro so a future flag or a dufs bug cannot write either. dufs still runs
+    # as root here on purpose: user: "999:999" is the tighter setting, but
+    # history/droid and project/.crush are 0700 root-owned, so it would make
+    # them 403 in the browser rather than merely unwritable.
     volumes:
-      - ./project:/srv/project
-      - ./data:/srv/data
-      - ./history:/srv/history
+      - ./project:/srv/project:ro
+      - ./data:/srv/data:ro
+      - ./history:/srv/history:ro
     networks:
       - harnesses_net
 
@@ -261,6 +312,7 @@ services:
     # exists in env, ignoring crush.json's lab provider entirely.  Skip the
     # openai-env anchor here so only PROVIDER_* (from env_file) is present.
     environment:
+      <<: *no-harness-secrets
       MODEL_NAME: ${MODEL_NAME}
 
   harness-gptme:
