@@ -117,10 +117,16 @@ MULTI_INSTANCE_HARNESSES = set(HARNESSES)
 # harness-<name> container + subdomain/JWT auth machinery as the CLI
 # harnesses above (see _ensure_running — it's already generic enough to
 # need no special-casing) but aren't ttyd/tmux CLIs: no idle-sweep, no
-# dynamic multi-instance sessions. Kept out of HARNESSES/
+# dynamic multi-instance sessions.
+#
+# "sweep" IS a ttyd/tmux CLI -- it is the coverage sweep's own opencode -- and
+# it belongs here rather than in HARNESSES for the one property this list
+# grants: no idle sweep. Stopping that container mid-round kills its tmux
+# session and the phase running in it. It also needs no dynamic <type>-<slug>
+# instances; one session is the whole point. Kept out of HARNESSES/
 # MULTI_INSTANCE_HARNESSES so _harness_type_of and the idle sweep leave
 # them alone, exactly like `auth` and `web-mcp` themselves.
-UTILITY_SERVICES = ["files"]
+UTILITY_SERVICES = ["files", "sweep"]
 ALL_SUBDOMAINS = HARNESSES + UTILITY_SERVICES
 INSTANCE_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$")
 ENV_FILE = "/app/.env"  # bind-mounted from host docker-compose.yml

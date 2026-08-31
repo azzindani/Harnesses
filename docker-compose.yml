@@ -63,6 +63,7 @@ x-no-harness-secrets: &no-harness-secrets
   TOKEN_PI: ""
   TOKEN_DROID: ""
   TOKEN_FILES: ""
+  TOKEN_SWEEP: ""
 
 x-anthropic-env: &anthropic-env
   <<: *no-harness-secrets
