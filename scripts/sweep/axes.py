@@ -702,3 +702,127 @@ AXES[22] = {
         ),
     },
 }
+
+
+# Round 23. The seventh repo joins the sweep, and the axis is the one technique
+# that found MCP_Documents' two worst defects in its own rounds 2 and 4 -- and
+# has never been run across the fleet. Round 22 asked one tool the same question
+# twice in a row; that only catches plain non-determinism. This asks it again
+# after ANOTHER tool has touched the same thing. Every server here holds state a
+# caller cannot see: a reader LRU, a loaded dataset, a workspace, an open
+# workbook, a cached model. `find('JUMLAH EKUITAS')` returned 5 hits, then 3
+# after an unrelated extract() on the same document, and `probe` reported a
+# document 12.9% smaller once its pages had been read -- both success: true,
+# both invisible to a repeat call, and both in the number whose whole job is to
+# stop the caller asking for too much. The tools that LOOK read-only are the
+# ones nobody suspects of writing anything.
+AXES[23] = {
+    "name": "ask the same question after something else has run",
+    "why": (
+        "Determinism checks repeat one call and prove nothing about this: the state that "
+        "changes the answer is written by a DIFFERENT tool. Two defects of exactly this shape "
+        "were found by accident on one pair of tools, and running it as a matrix on nine tools "
+        "found a third in minutes. It is cheap, it needs no ground truth, and nothing in CI can "
+        "see it -- every call succeeds, every response reads correctly, and only the comparison "
+        "between the first answer and the third one shows anything at all. The mirror case is "
+        "the same question backwards and just as unchecked: after a write tool really changes "
+        "something, a reader that reports no change is the tool whose entire job is confirming "
+        "the edit landed saying the edit did nothing."
+    ),
+    "main": (
+        "THE MAIN TASK OF THIS PHASE: find out whether these tools change each other's answers. "
+        "Pick a target -- a file, a dataset, a document, a workbook, a model -- and work on that "
+        "ONE target for the whole phase wherever the tools allow it. "
+        "STEP ONE, pick a WITNESS: a read-only tool in this phase that answers with numbers or a "
+        "list. Call it and keep the whole response. "
+        "STEP TWO, call the witness a SECOND time immediately, with byte-identical arguments. If "
+        "those two differ at all, stop and record it -- a tool whose answer changes with nothing "
+        "in between is the worst finding available here. "
+        "STEP THREE, call the phase's other tools on the SAME target, one at a time, in the "
+        "order the tools' own descriptions suggest a caller would use them. "
+        "STEP FOUR, call the witness a THIRD time, byte-identical to the first. Diff it against "
+        "the first response field by field. Anything that differs and is not a timestamp, a "
+        "duration or a generated filename is a finding: quote the field, the value before and "
+        "the value after. If you can say which tool in between changed it, say so -- re-run the "
+        "witness after a single suspect if that is quick. "
+        "Do this for at least THREE different witnesses in this phase, not one. Prefer as "
+        "witnesses the tools that count, measure, size or estimate something -- a page count, a "
+        "row count, a token estimate, a match count, a list of columns -- because a number that "
+        "silently moves is worth more than a sentence that changes wording. "
+        "AND THE SAME QUESTION BACKWARDS: where this phase has a tool that WRITES, make a change "
+        "you can describe in one sentence, then ask a reader about it. A reader that reports the "
+        "same answer as before, 'no changes', or an empty list, after a change you know landed, "
+        "is a finding of exactly equal weight -- verify the change really landed first, by "
+        "reading the file itself or with a tool on a different server. "
+        "Do not report an answer that changes because the DATA changed. A count that moves "
+        "because you added a row is correct; a count that moves because something merely LOOKED "
+        "at the target is the defect. Say which one you are reporting. "
+        "Not every server here takes a data file: arithmetic tools take an expression or a "
+        "formula, browser tools take a URL -- use https://example.com/ for those, and there the "
+        "witness is asking for the same page again after fetching another. Document tools take a "
+        "document, not a dataset: use /workspace/data/BBCA_filing.pdf, a real 183-page filing, "
+        "and do not modify, overwrite or delete it -- write every output under your own scratch "
+        "directory. It is a big document: ask about a few pages at a time rather than all of it, "
+        "and if a tool refuses because the answer would be too large, that refusal is an answer "
+        "-- record what it suggested and whether following the suggestion worked. "
+        "Two contracts that are deliberate, so they are not findings: one server answers ok "
+        "rather than success and carries no op or token_estimate -- record that once as that "
+        "server's shape. And bold and italic are the quoted strings \"true\", \"false\" and \"\" "
+        "rather than JSON booleans, because a boolean cannot say 'turn it off'; a refusal naming "
+        "the quoted form is that contract working, so send the quoted form and carry on. "
+    ),
+    "unit": "witness",
+    "columns": (
+        "tool name | what you called | witness or actor | called twice back to back: identical? "
+        "| after the other tools ran, is the same call still identical -- and if not, which field "
+        "moved, from what to what | if this tool wrote something, did a reader see the change? | "
+        "notes"
+    ),
+    "columns_ops": (
+        "op name | what you called | witness or actor | called twice back to back: identical? | "
+        "after the other ops ran, is the same call still identical -- which field moved, from "
+        "what to what | did a read op see what this op did? | notes"
+    ),
+    "fs_extra": {
+        "fsw1": (
+            "The witness here is fs_read: take mode=meta on one file you wrote first, and take "
+            "it again after the copy, move, rename and replace_text ops have run on OTHER files "
+            "in the same directory. The size, the line count and the path must not have moved. "
+            "Then the backwards check: after replace_text and after insert_after, fs_read the "
+            "file and confirm the new bytes are really there -- an op that reports a count of "
+            "lines changed and leaves the file alone is the finding. And after copy, move and "
+            "rename, ask fs_read about the ORIGINAL path: a moved file must be gone from where "
+            "it was, and a copied one must still be there."
+        ),
+        "fsw2": (
+            "The witness is fs_read mode=meta on a file you keep untouched for the whole phase. "
+            "set_permissions must report the mode actually set -- read it back and compare the "
+            "two strings. download must report the real byte count; use https://example.com/ as "
+            "the url. The delete_*_request ops return a token their matching confirm needs -- "
+            "carry it across, then reuse a spent token, which must be refused. Between each of "
+            "those, re-ask the witness: nothing you did to other files may change what fs_read "
+            "says about this one."
+        ),
+        "fsr1": (
+            "This phase is the axis itself. Run fs_query with one pattern and record the count. "
+            "Run it again with no changes -- the two counts must agree. Then use fs_write to add "
+            "ONE file that matches the pattern, and run the identical query a third time: the "
+            "count must go up by exactly one, and the new file must be in the list. A count that "
+            "does not move is a stale answer; a count that moves by more than one is counting "
+            "something else. Then run the SAME query with a smaller and a larger max_results and "
+            "check whether the total it reports moves with it -- a total that changes when you "
+            "only asked for fewer results is reporting how much it searched, not how much is "
+            "there. Do the same pairing with fs_read mode=content and mode=meta on one file: read "
+            "it, run the queries, read it again, and compare."
+        ),
+        "fsr2": (
+            "Witness with fs_index action stats, then action query. Record the counts. Add a "
+            "file with fs_write, then ask both again: an index that answers exactly as before "
+            "has either not noticed or is answering from a cache, and its response should say "
+            "which. For fs_archive, create an archive, then extract it somewhere else and "
+            "compare the extracted files to the originals byte for byte; then ask fs_manage "
+            "action disk_usage about the directory before and after, and check the number moved "
+            "in the direction and roughly the amount you expect."
+        ),
+    },
+}
