@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  # The same lint + validate jobs a push to main runs. Reused rather than
+  # copied so the release gate cannot drift away from the everyday one.
+  ci:
+    name: CI before release
+    uses: ./.github/workflows/ci.yml
+
+  # Nothing is built or published here. This repo is a deployment: it is used
+  # by cloning it and running `docker compose up`, and the images it runs are
+  # built on the operator's own box from the Dockerfiles in `harnesses/`.
+  # There is no wheel, no container image and no artifact to attach -- the tag
+  # and its notes are the release.
+  release:
+    name: Create GitHub Release
+    needs: ci
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract tag
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.version }}
+          name: ${{ steps.tag.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.version, '-rc') || contains(steps.tag.outputs.version, '-beta') || contains(steps.tag.outputs.version, '-alpha') }}
+          generate_release_notes: true
+          body: |
+            See [`CHANGELOG.md`](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what changed in this release.
+
+            This repo is run, not installed: clone it, fill in `.env` from `.env.example`, and `docker compose up -d`. No package or container image is published — every harness image is built locally from the Dockerfiles in `harnesses/`.

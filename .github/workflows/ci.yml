@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # release.yml calls this workflow as the gate before it cuts a release, so a
+  # tag can only become a release if the same checks a push runs have passed.
+  workflow_call:
 
 # Cancel in-flight runs of the same ref when a newer push lands.
 concurrency:
