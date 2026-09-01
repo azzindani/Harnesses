@@ -338,6 +338,15 @@ services:
       # empty opencode.db and therefore no credentials, so it can only ever
       # reach the anonymous free tier, never a paid subscription.
       OPENCODE_MODEL: ${SWEEP_MODEL:-}
+      # Same reasoning one variable over. `.env`'s MCP_DISABLED scopes the
+      # PERSONAL harness -- it hides browser, filesystem and the xlsx/pptx
+      # mounts because opencode has native file tools and the operator does not
+      # want that surface. A sweep must see everything: those nine mounts are
+      # repos under test, and round 23b found a live defect in the browser's
+      # query_select precisely by calling it. Empty (the default) means nothing
+      # is hidden here whatever `.env` says, because `environment:` beats
+      # `env_file:` per variable.
+      MCP_DISABLED: ${SWEEP_MCP_DISABLED:-}
     networks:
       - harnesses_net
 
