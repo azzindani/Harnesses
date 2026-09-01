@@ -331,7 +331,13 @@ services:
     environment:
       <<: *openai-env
       MODEL_NAME: ${MODEL_NAME}
-      OPENCODE_MODEL: ""
+      # SWEEP_MODEL, not OPENCODE_MODEL: the personal harness reads the latter
+      # from .env and this container must never follow it. Empty (the default)
+      # means the OpenRouter `lab` route. Set it to one of opencode's own
+      # *-free ids to ride out an OpenRouter quota day -- this container has an
+      # empty opencode.db and therefore no credentials, so it can only ever
+      # reach the anonymous free tier, never a paid subscription.
+      OPENCODE_MODEL: ${SWEEP_MODEL:-}
     networks:
       - harnesses_net
 
