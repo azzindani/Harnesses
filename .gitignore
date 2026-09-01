@@ -34,5 +34,20 @@ __pycache__/
 # against one filename instead of the shape the tooling actually produces.
 scripts/sweep/phases_r*.tsv
 scripts/sweep/tools_r*.tsv
-scripts/sweep/sweep*.log
 scripts/sweep/*.nohup
+
+# `sweep*.log` was the rule here and it was the same mistake a third time:
+# round 23 also produced watch_r23.log, watch_r23fix.log and stop_after_22.log
+# from watch_round.sh and stop_after_22.sh, none of which start with "sweep".
+# Every log this directory generates, by shape.
+scripts/sweep/*.log
+
+# Reports archived out of data/ before a round wipes it. data/** is already
+# ignored, so a tarball of it is not repo content either.
+scripts/sweep/archive/
+
+# Timestamped backups, of anything. The .env.bak near-miss above is the
+# reason; docker-compose.yml.bak.<stamp> is the same shape from the same habit
+# of backing a file up before editing it.
+*.bak
+*.bak.*

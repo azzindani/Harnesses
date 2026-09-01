@@ -70,6 +70,12 @@ INCREMENTAL = (
     "room before writing any report -- so the work was done and every finding was lost. Do not "
     "put your findings anywhere else: not in a CSV, not in a scratch file, not in your reply. "
     "The report file at that path is the only thing that counts as output. "
+    "END EVERY ROW WITH A NEWLINE. Append each row as its own LINE -- if the append tool does "
+    "not add one, put \\n at the end of the text you send. A row appended without a trailing "
+    "newline fuses onto the previous one ('...establishedassemble | ...'), and a report whose "
+    "rows share one physical line is counted as ONE row however many tools it covers. Round 23 "
+    "lost the row count on five phases this way. After appending, read the file back and check "
+    "it has one line per tool plus the header. "
 )
 
 REPORT = (
