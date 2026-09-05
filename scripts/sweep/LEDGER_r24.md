@@ -65,48 +65,77 @@ overwrites a verdict a person typed.
 
 | phase | label | report | tools | rows | verdict |
 |---|---|---|---:|---|---|
-| 1 | filesystem: fs_write, part 1 | `report_r24_fs_write_1.md` | 8 |  |  |
-| 2 | filesystem: fs_write, part 2 | `report_r24_fs_write_2.md` | 8 |  |  |
-| 3 | filesystem: fs_read modes and fs_query | `report_r24_fs_read.md` | 7 |  |  |
-| 4 | filesystem: fs_index, fs_manage, fs_archive | `report_r24_fs_actions.md` | 8 |  |  |
-| 5 | docs-read | `report_r24_docs_read.md` | 7 |  |  |
-| 6 | docs-edit | `report_r24_docs_edit.md` | 6 |  |  |
-| 7 | data-basic, part 1 | `report_r24_data_basic_1.md` | 5 |  |  |
-| 8 | data-basic, part 2 | `report_r24_data_basic_2.md` | 4 |  |  |
-| 9 | data-ingest, part 1 | `report_r24_data_ingest_1.md` | 5 |  |  |
-| 10 | data-ingest, part 2 | `report_r24_data_ingest_2.md` | 5 |  |  |
-| 11 | data-medium, part 1 | `report_r24_data_medium_1.md` | 6 |  |  |
-| 12 | data-medium, part 2 | `report_r24_data_medium_2.md` | 5 |  |  |
-| 13 | data-statistics, part 1 | `report_r24_data_statistics_1.md` | 6 |  |  |
-| 14 | data-statistics, part 2 | `report_r24_data_statistics_2.md` | 6 |  |  |
-| 15 | data-transform, part 1 | `report_r24_data_transform_1.md` | 5 |  |  |
-| 16 | data-transform, part 2 | `report_r24_data_transform_2.md` | 5 |  |  |
-| 17 | data-visual, part 1 | `report_r24_data_visual_1.md` | 7 |  |  |
-| 18 | data-visual, part 2 | `report_r24_data_visual_2.md` | 6 |  |  |
-| 19 | data-workspace | `report_r24_data_workspace.md` | 6 |  |  |
-| 20 | math | `report_r24_math.md` | 8 |  |  |
-| 21 | browser, part 1 | `report_r24_browser_1.md` | 7 |  |  |
-| 22 | browser, part 2 | `report_r24_browser_2.md` | 6 |  |  |
-| 23 | ml-basic, part 1 | `report_r24_ml_basic_1.md` | 6 |  |  |
-| 24 | ml-basic, part 2 | `report_r24_ml_basic_2.md` | 5 |  |  |
-| 25 | ml-medium, part 1 | `report_r24_ml_medium_1.md` | 6 |  |  |
-| 26 | ml-medium, part 2 | `report_r24_ml_medium_2.md` | 6 |  |  |
-| 27 | ml-advanced, part 1 | `report_r24_ml_advanced_1.md` | 5 |  |  |
-| 28 | ml-advanced, part 2 | `report_r24_ml_advanced_2.md` | 5 |  |  |
-| 29 | office-docx-basic, part 1 | `report_r24_office_docx_basic_1.md` | 8 |  |  |
-| 30 | office-docx-basic, part 2 | `report_r24_office_docx_basic_2.md` | 7 |  |  |
-| 31 | office-docx-layout | `report_r24_office_docx_layout.md` | 7 |  |  |
-| 32 | office-docx-new, part 1 | `report_r24_office_docx_new_1.md` | 5 |  |  |
-| 33 | office-docx-new, part 2 | `report_r24_office_docx_new_2.md` | 4 |  |  |
-| 34 | office-docx-tables, part 1 | `report_r24_office_docx_tables_1.md` | 5 |  |  |
-| 35 | office-docx-tables, part 2 | `report_r24_office_docx_tables_2.md` | 5 |  |  |
-| 36 | office-pptx-basic, part 1 | `report_r24_office_pptx_basic_1.md` | 5 |  |  |
-| 37 | office-pptx-basic, part 2 | `report_r24_office_pptx_basic_2.md` | 5 |  |  |
-| 38 | office-pptx-design | `report_r24_office_pptx_design.md` | 8 |  |  |
-| 39 | office-pptx-new | `report_r24_office_pptx_new.md` | 6 |  |  |
-| 40 | office-xlsx-basic, part 1 | `report_r24_office_xlsx_basic_1.md` | 7 |  |  |
-| 41 | office-xlsx-basic, part 2 | `report_r24_office_xlsx_basic_2.md` | 7 |  |  |
-| 42 | office-xlsx-charts | `report_r24_office_xlsx_charts.md` | 5 |  |  |
-| 43 | office-xlsx-formulas, part 1 | `report_r24_office_xlsx_formulas_1.md` | 5 |  |  |
-| 44 | office-xlsx-formulas, part 2 | `report_r24_office_xlsx_formulas_2.md` | 4 |  |  |
-| 45 | office-xlsx-new | `report_r24_office_xlsx_new.md` | 6 |  |  |
+| 1 | filesystem: fs_write, part 1 | `report_r24_fs_write_1.md` | 8 | 8 | **INVALID** — quoted descriptions fabricated |
+| 2 | filesystem: fs_write, part 2 | `report_r24_fs_write_2.md` | 8 | 8 | **INVALID** — quoted descriptions fabricated |
+| 3 | filesystem: fs_read modes and fs_query | `report_r24_fs_read.md` | 7 | 6 | **INVALID** — quoted descriptions fabricated |
+| 4 | filesystem: fs_index, fs_manage, fs_archive | `report_r24_fs_actions.md` | 8 | 13 | **INVALID** — quoted descriptions fabricated |
+| 5 | docs-read | `report_r24_docs_read.md` | 7 | 7 | PASS |
+| 6 | docs-edit | `report_r24_docs_edit.md` | 6 | 6 | PASS |
+| 7 | data-basic, part 1 | `report_r24_data_basic_1.md` | 5 | 5 | PASS |
+| 8 | data-basic, part 2 | `report_r24_data_basic_2.md` | 4 | 4 | PASS |
+| 9 | data-ingest, part 1 | `report_r24_data_ingest_1.md` | 5 | 5 | PASS |
+| 10 | data-ingest, part 2 | `report_r24_data_ingest_2.md` | 5 | 3 | **UNFINISHED** (3/5) |
+| 11 | data-medium, part 1 | `report_r24_data_medium_1.md` | 6 | 6 | PASS |
+| 12 | data-medium, part 2 | `report_r24_data_medium_2.md` | 5 | 4 | **UNFINISHED** (4/5) |
+| 13 | data-statistics, part 1 | `report_r24_data_statistics_1.md` | 6 | 6 | PASS |
+| 14 | data-statistics, part 2 | `report_r24_data_statistics_2.md` | 6 | 6 | PASS |
+| 15 | data-transform, part 1 | `report_r24_data_transform_1.md` | 5 | 5 | PASS |
+| 16 | data-transform, part 2 | `report_r24_data_transform_2.md` | 5 | 5 | **INVALID** — 5 rows, none of its 5 tools |
+| 17 | data-visual, part 1 | `report_r24_data_visual_1.md` | 7 | 7 | PASS |
+| 18 | data-visual, part 2 | `report_r24_data_visual_2.md` | 6 | 5 | **UNFINISHED** (5/6) |
+| 19 | data-workspace | `report_r24_data_workspace.md` | 6 |  | **DRY** |
+| 20 | math | `report_r24_math.md` | 8 |  | **DRY** |
+| 21 | browser, part 1 | `report_r24_browser_1.md` | 7 |  | **DRY** |
+| 22 | browser, part 2 | `report_r24_browser_2.md` | 6 |  | NOT REACHED |
+| 23 | ml-basic, part 1 | `report_r24_ml_basic_1.md` | 6 |  | NOT REACHED |
+| 24 | ml-basic, part 2 | `report_r24_ml_basic_2.md` | 5 |  | NOT REACHED |
+| 25 | ml-medium, part 1 | `report_r24_ml_medium_1.md` | 6 |  | NOT REACHED |
+| 26 | ml-medium, part 2 | `report_r24_ml_medium_2.md` | 6 |  | NOT REACHED |
+| 27 | ml-advanced, part 1 | `report_r24_ml_advanced_1.md` | 5 |  | NOT REACHED |
+| 28 | ml-advanced, part 2 | `report_r24_ml_advanced_2.md` | 5 |  | NOT REACHED |
+| 29 | office-docx-basic, part 1 | `report_r24_office_docx_basic_1.md` | 8 |  | NOT REACHED |
+| 30 | office-docx-basic, part 2 | `report_r24_office_docx_basic_2.md` | 7 |  | NOT REACHED |
+| 31 | office-docx-layout | `report_r24_office_docx_layout.md` | 7 |  | NOT REACHED |
+| 32 | office-docx-new, part 1 | `report_r24_office_docx_new_1.md` | 5 |  | NOT REACHED |
+| 33 | office-docx-new, part 2 | `report_r24_office_docx_new_2.md` | 4 |  | NOT REACHED |
+| 34 | office-docx-tables, part 1 | `report_r24_office_docx_tables_1.md` | 5 |  | NOT REACHED |
+| 35 | office-docx-tables, part 2 | `report_r24_office_docx_tables_2.md` | 5 |  | NOT REACHED |
+| 36 | office-pptx-basic, part 1 | `report_r24_office_pptx_basic_1.md` | 5 |  | NOT REACHED |
+| 37 | office-pptx-basic, part 2 | `report_r24_office_pptx_basic_2.md` | 5 |  | NOT REACHED |
+| 38 | office-pptx-design | `report_r24_office_pptx_design.md` | 8 |  | NOT REACHED |
+| 39 | office-pptx-new | `report_r24_office_pptx_new.md` | 6 |  | NOT REACHED |
+| 40 | office-xlsx-basic, part 1 | `report_r24_office_xlsx_basic_1.md` | 7 |  | NOT REACHED |
+| 41 | office-xlsx-basic, part 2 | `report_r24_office_xlsx_basic_2.md` | 7 |  | NOT REACHED |
+| 42 | office-xlsx-charts | `report_r24_office_xlsx_charts.md` | 5 |  | NOT REACHED |
+| 43 | office-xlsx-formulas, part 1 | `report_r24_office_xlsx_formulas_1.md` | 5 |  | NOT REACHED |
+| 44 | office-xlsx-formulas, part 2 | `report_r24_office_xlsx_formulas_2.md` | 4 |  | NOT REACHED |
+| 45 | office-xlsx-new | `report_r24_office_xlsx_new.md` | 6 |  | NOT REACHED |
+
+## State at the quota stop — 2026-09-05
+
+**18 of 45 phases reported, 109 rows.** OpenRouter's `free-models-per-day-high-balance`
+quota hit at **18:22:10Z**, mid-phase-19; phases 19, 20 and 21 wrote nothing and the
+driver's three-consecutive-empties guard stopped the round at 18:47. Phases 22-45 were
+never reached. Log `sweep_r24.log`, 43 rate-limit lines in the container's own log.
+
+**Five phases are INVALID rather than short, and both reasons matter.**
+
+* **Phases 1-4 (File_System) fabricated the descriptions they were scored against.**
+  `fs_write`'s real description is the 70-character *"Write, edit, move, copy, download
+  a URL, restore. Delete needs a token."* covering sixteen ops. Asked by `columns_ops`
+  for "the description sentence that covers this op", the model wrote one per op —
+  *"Delete lines from a file by line number range."*, *"Set file permissions (mode) on a
+  file."* — none of which appear in any server's `tools/list`. It then marked its own
+  inventions BROKEN: `delete_request` was scored against "deletes the file immediately",
+  a claim the tool never makes and correctly does not honour. **This is an axis bug, not
+  a model failure, and `descriptions_r24.tsv` is what caught it** — the grading key
+  earning its keep on the round's first four phases. `columns_ops` is fixed for r24b.
+  What survives from these four: the *undeclared effects* column, which independently
+  reports that every write op leaves a backup no description mentions.
+* **Phase 16 passed on row count while covering none of its tools.** Five rows, and
+  `check_coverage.py` finds all five named tools — `concat_datasets`, `smart_impute`,
+  `run_cleaning_pipeline`, `feature_engineering`, `enrich_with_geo` — absent. The
+  standing rule that row count is not coverage, in its sharpest form yet: the ledger
+  said PASS and the phase did none of its work.
+
+**Two findings confirmed by hand, without a model** — see `FINDINGS_r24.md`.

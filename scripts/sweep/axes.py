@@ -892,10 +892,20 @@ AXES[24] = {
         "to break it | HELD / BROKEN / VAGUE | what it did that its description never mentions | "
         "notes"
     ),
+    # The ops columns name the TOOL's description, not the op's, because there
+    # is no such thing as an op description: six File_System tools carry ~50 ops
+    # behind one 70-character sentence each. Asked in round 24 for "the sentence
+    # that covers this op", the model invented a plausible one per op -- "Delete
+    # lines from a file by line number range." is not in any server's tools/list
+    # -- and then marked its own inventions BROKEN. Every FS verdict that round
+    # was scored against a claim nobody made. So: quote the tool's real sentence
+    # verbatim in every row, and say whether it names this op at all.
     "columns_ops": (
-        "op name | the description sentence that covers this op, quoted | the claim you tested | "
-        "the call you made to break it | HELD / BROKEN / VAGUE | what it did that the description "
-        "never mentions | notes"
+        "op name | its TOOL's description quoted EXACTLY (the one sentence tools/list gives for "
+        "fs_read, fs_write, ... -- the same text in every row for that tool; there is no separate "
+        "description per op, so never write one) | does that sentence name this op: NAMED / "
+        "UNDECLARED | the claim you tested | the call you made to break it | HELD / BROKEN / VAGUE "
+        "| what it did that the description never mentions | notes"
     ),
     "fs_extra": {
         "fsw1": (
