@@ -826,3 +826,117 @@ AXES[23] = {
         ),
     },
 }
+
+
+AXES[24] = {
+    "name": "believe the description",
+    "why": (
+        "An MCP client sees one sentence per tool and nothing else -- no README, no examples, "
+        "no source. In this fleet that sentence is the tool's docstring, capped at 80 characters "
+        "by a CI check, which is exactly the pressure that makes a description over-promise: "
+        "'SELECT-only', 'Bounded always', 'Returns names only, no data', 'preserving run "
+        "formatting'. Round 23b's best defect was found this way and not by its own axis -- "
+        "query_select says SELECT-only and enforces it by testing whether the string starts with "
+        "'select' or 'with', so WITH x AS (SELECT 1) DELETE FROM pages walks past the guard and "
+        "empties the table under ok: true. Nothing in CI can see this class: CI asserts what the "
+        "code does and never that the sentence above it is true. And it needs no ground truth, "
+        "because every tool ships its own oracle."
+    ),
+    "main": (
+        "THE MAIN TASK OF THIS PHASE: treat each tool's own DESCRIPTION as a contract and try to "
+        "prove it wrong. The description is the one-line summary your client shows you for that "
+        "tool -- the same text you would read to work out how to call it. "
+        "STEP ONE, before calling anything, copy the tool's description into your report row "
+        "VERBATIM. If you paraphrase it the row is worthless, because the whole question is "
+        "whether those exact words are true. "
+        "STEP TWO, find the CLAIM in it. Nearly every description here carries one: a limiting "
+        "word (only, never, always, bounded, in-place, literal, permanently), an automatic "
+        "behaviour (auto-detect, auto-select), a promise about the answer's shape (returns names "
+        "only, returns a path only, reports the real change), a number (max 50 paragraphs), or an "
+        "argument contract (content is literal unless regex=True). Say which claim you picked. "
+        "STEP THREE, make ONE ordinary call designed to make that claim false. Ordinary is the "
+        "point: the caller who gets hurt is the one who believed the sentence, not one hunting "
+        "for an exotic input. If it says only, try the thing it excludes. If it says bounded or a "
+        "maximum, hand it something far bigger and see whether the bound bites AND says so. If it "
+        "says auto-detect, give it something plausible and check what it actually chose. If it "
+        "promises the answer's shape, read the response and check nothing else came back. "
+        "STEP FOUR, the other direction: name anything the tool DOES that its description does "
+        "not mention. List your scratch directory before and after every call, so you can say "
+        "exactly what appeared: a second file, a backup, a chart you did not ask for, a "
+        "directory. Also check whether the INPUT you passed came back modified. An undeclared "
+        "side effect counts the same as a broken claim. "
+        "Record each tool as HELD, BROKEN or VAGUE. VAGUE is for a description carrying no "
+        "checkable claim, or one you could not work out a call from: say what you had to guess "
+        "and whether the guess worked. "
+        "Two things that are NOT findings: a tool refusing exactly what its description says it "
+        "refuses is the contract working, so record HELD; and a capability the description never "
+        "claims is not a broken promise -- judge the sentence that is there. "
+        "Not every server takes a data file: arithmetic tools take an expression, browser tools "
+        "take a URL -- use https://example.com/. Document tools take a document: "
+        "/workspace/data/BBCA_filing.pdf, a real 183-page filing, and /workspace/data/"
+        "BBCA_instance.zip, which is an archive and not a document at all -- what a tool claiming "
+        "to identify a document says about a container is exactly this round's question. Do not "
+        "modify or delete either; write every output under your own scratch directory. The filing "
+        "is big: ask about a few pages at a time, and a refusal because the answer would be too "
+        "large is that tool testing its own 'bounded' claim -- record what it suggested and "
+        "whether following the suggestion worked. "
+        "Two contracts that are deliberate, so they are not findings: one server answers ok "
+        "rather than success and carries no op or token_estimate -- record that once as that "
+        'server\'s shape. And bold and italic are the quoted strings "true", "false" and "" '
+        "rather than JSON booleans, because a boolean cannot say 'turn it off'; a refusal naming "
+        "the quoted form is that contract working, so send the quoted form and carry on. "
+    ),
+    "unit": "claim",
+    "columns": (
+        "tool name | its description quoted EXACTLY | the claim you tested | the call you made "
+        "to break it | HELD / BROKEN / VAGUE | what it did that its description never mentions | "
+        "notes"
+    ),
+    "columns_ops": (
+        "op name | the description sentence that covers this op, quoted | the claim you tested | "
+        "the call you made to break it | HELD / BROKEN / VAGUE | what it did that the description "
+        "never mentions | notes"
+    ),
+    "fs_extra": {
+        "fsw1": (
+            "fs_write's entire description is 'Write, edit, move, copy, download a URL, restore. "
+            "Delete needs a token.' -- six verbs for sixteen ops, so most of what you run here is "
+            "undeclared and that is the phase's main question. For each op say whether the "
+            "description names it at all. Then test the verbs it does name: does copy leave the "
+            "original where it was, and does move remove it? Is restore a real op, and what does "
+            "it restore? Does replace_text report a count that matches the number of replacements "
+            "actually in the file -- read it back and count them yourself."
+        ),
+        "fsw2": (
+            "'Delete needs a token' is the claim, so attack it three ways: delete with no token, "
+            "delete with a token from a DIFFERENT request, and delete twice with the same token. "
+            "All three must be refused and the refusal must say which case it hit. download is "
+            "the only verb in that sentence that reaches the network: use https://example.com/ "
+            "and check the byte count it reports against the file it actually wrote. "
+            "set_permissions and the line-editing ops are not in the description at all -- record "
+            "them as undeclared, and check set_permissions reports the mode it really set by "
+            "reading it back."
+        ),
+        "fsr1": (
+            "One claim per tool, and both are unusually precise. fs_read says 'Bounded always': "
+            "find the bound and make it bite -- read the biggest file in /workspace/data with "
+            "mode=content, and record whether it truncates, whether it SAYS it truncated, and "
+            "whether it tells you the true total. A bound that is silent breaks the word always. "
+            "fs_query says 'content is literal unless regex=True': search for a string containing "
+            "regex metacharacters -- a dot, a bracket, .* -- with regex unset. Literal means those "
+            "characters must match themselves and nothing else. Then run the identical pattern "
+            "with regex=True and compare the two counts; if they are equal, one of the two modes "
+            "is not doing what the sentence says."
+        ),
+        "fsr2": (
+            "Three descriptions, three argument or shape claims. fs_index claims "
+            "'build/query/list file index or read operation receipt history' -- run all four and "
+            "check whether list tells you how many entries EXIST or only how many it returned. "
+            "fs_manage claims four things including a 'snapshot version list' -- run all four and "
+            "check versions actually shows the snapshots the write ops in earlier phases left "
+            "behind. fs_archive's description is an argument contract, 'path=archive, target=what "
+            "goes in it' -- swap the two deliberately and check the error names the right one, "
+            "then create and extract for real and compare the files byte for byte."
+        ),
+    },
+}
