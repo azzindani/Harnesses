@@ -1,0 +1,243 @@
+docs-read	probe	Identify a document: format, pages, scanned or digital, what it holds.
+docs-read	outline	List headings and bookmarks with page anchors. Use before extract.
+docs-read	find	Locate text across a document. Returns page locations, not content.
+docs-read	extract	Extract clean text for a page range. Bounded; refuses when too big.
+docs-read	extract_tables	Extract tables as rows. Says whether ruling lines or gaps were used.
+docs-read	read_page	Read one page: text, tables, links, and how each was obtained.
+docs-read	to_markdown	Convert a document to markdown. Refuses when over the token budget.
+docs-edit	assemble	Build a document from a page selection: merge, split, reorder, rotate.
+docs-edit	convert	Convert between formats: pdf, txt, md, html, images.
+docs-edit	optimize	Compress, repair or linearise a PDF. Reports the real size change.
+docs-edit	ocr	Add a searchable text layer to scanned pages. Page range required.
+docs-edit	protect	Encrypt, decrypt, or clear a PDF's permission flags. Needs a password.
+docs-edit	redact	Permanently remove matching content, then verify it cannot be extracted.
+data-basic	load_dataset	Load CSV from a local path or an http(s) URL. Returns the schema.
+data-basic	load_geo_dataset	Load GeoJSON or shapefile. Returns geometry columns and CRS.
+data-basic	inspect_dataset	Inspect schema, dtypes, nulls, totals. Takes a local path or URL.
+data-basic	read_column_stats	Stats for one column: mean median std min max nulls unique top.
+data-basic	search_columns	Find columns by criteria: has_nulls dtype has_zeros name_contains.
+data-basic	apply_patch	Apply ordered ops to a CSV. ops: see Op Reference below.
+data-basic	restore_version	Restore a snapshot. No timestamp overwrites with the newest.
+data-basic	read_receipt	Read operation history log for a file. Returns receipt entries.
+data-basic	list_patch_ops	List apply_patch ops. Omit category to get all, grouped by category.
+data-ingest	list_sheets	List sheets in xlsx/ods with row and col counts.
+data-ingest	extract_sheet	Extract one sheet to CSV. sheet: name or index (default first).
+data-ingest	extract_all_sheets	Extract all sheets to separate CSVs in output_dir.
+data-ingest	detect_tables	Detect separate tables in a sheet separated by blank rows/cols.
+data-ingest	extract_table	Extract one detected table by index to CSV.
+data-ingest	normalize_headers	CSV: strip whitespace, lowercase, dedup headers. output_path: write elsewhere.
+data-ingest	trim_empty	CSV: drop empty leading/trailing rows and cols. output_path: write elsewhere.
+data-ingest	promote_header	CSV: make row N the header; drop rows above. output_path: write elsewhere.
+data-ingest	flatten_merged_cells	Forward-fill merged cell regions in xlsx sheet to CSV.
+data-ingest	convert_file	Convert xlsx/ods/csv/json/parquet to csv/json/parquet/excel.
+data-medium	compute_aggregations	Group by columns and aggregate. agg: sum mean count min max.
+data-medium	cross_tabulate	Contingency table between two categorical columns.
+data-medium	pivot_table	Multi-dimensional pivot/aggregation table.
+data-medium	value_counts	Frequency tables with percentages for categorical columns.
+data-medium	filter_rows	Filter rows. Compare a column to 'value' or to 'other_column'.
+data-medium	sample_data	Sample rows from dataset. methods: random head tail.
+data-medium	statistical_tests	Auto-select and run statistical tests: t-test ANOVA chi-square correlation.
+data-medium	analyze_text_column	Analyze text column: length stats, word freq, pattern detection.
+data-medium	detect_anomalies	Flag anomalous rows using IQR and/or z-score. Saves flagged CSV.
+data-medium	compare_datasets	Compare two CSVs: schema diff, row counts, value changes.
+data-medium	extended_stats	Deep numeric stats: skewness kurtosis percentiles CI MAD CV distribution.
+data-statistics	extended_stats	Deep numeric stats: skewness kurtosis percentiles CI MAD CV distribution.
+data-statistics	validate_dataset	Validate dataset quality: types nulls duplicates ranges. Score 0-100.
+data-statistics	auto_detect_schema	Auto-detect column types, dates, IDs, categories with cleaning suggestions.
+data-statistics	check_outliers	Scan for outliers + anomalies. method: iqr std both. Flags anomalous rows.
+data-statistics	scan_nulls_zeros	Scan all columns for nulls and zeros. Returns counts, pcts, patterns.
+data-statistics	correlation_analysis	Correlation matrix + top pairs. method: pearson spearman kendall.
+data-statistics	lag_correlation	Cross-correlate two columns across lags. Returns the curve and its peak.
+data-statistics	statistical_test	Run stat test. test: shapiro_wilk t_test anova chi_square mann_whitney kruskal.
+data-statistics	regression_analysis	OLS or logistic regression. Returns coefs p-values R2 RMSE diagnostics.
+data-statistics	time_series_analysis	Trend, seasonality and rolling stats. dayfirst: auto true false.
+data-statistics	period_comparison	Compare periods: MoM QoQ YoY. dayfirst: auto true false.
+data-statistics	cohort_analysis	Cohort retention matrix. dayfirst: auto true false.
+data-transform	filter_dataset	Filter rows + sort. Compare to 'value' or to 'other_column'.
+data-transform	reshape_dataset	Reshape data. mode: pivot melt split_column combine_columns transpose.
+data-transform	aggregate_dataset	Aggregate data. mode: groupby crosstab value_counts describe window.
+data-transform	resample_timeseries	Resample by freq: D W M Q Y H. agg: sum mean count min max.
+data-transform	merge_datasets	Merge two datasets. how: inner left right outer. Auto-detect join keys.
+data-transform	concat_datasets	Stack multiple CSVs vertically (rows) or horizontally (columns).
+data-transform	smart_impute	Smart impute missing values using column-type-appropriate strategies.
+data-transform	run_cleaning_pipeline	Run ordered cleaning ops in one call. Single snapshot taken.
+data-transform	feature_engineering	Add columns: auto features, or derive named parse_date date_part arith.
+data-transform	enrich_with_geo	Merge dataset with geo data on location key. Saves enriched result.
+data-visual	run_eda	EDA summary. mode=minimal|standard|full, sample_n, include. Saves HTML.
+data-visual	generate_auto_profile	Full column profile: stats charts correlations outliers insights.
+data-visual	generate_distribution_plot	Histogram + box plot per numeric column, with shape stats. Samples above 5k.
+data-visual	generate_correlation_heatmap	Interactive correlation heatmap for numeric columns. Saves HTML.
+data-visual	generate_pairwise_plot	Pairwise scatter + histogram matrix for numeric columns. Saves HTML.
+data-visual	generate_multi_chart	Multi-metric bar/line chart. bar needs category_column, line needs date_column.
+data-visual	generate_chart	Generate chart. bar/pie/line/scatter/funnel/radius/geo need category_column.
+data-visual	generate_geo_map	Geo map: scatter (lat/lon) or choropleth (country/state). Auto-detects.
+data-visual	generate_3d_chart	3D scatter or surface chart. type: scatter_3d surface. Saves HTML.
+data-visual	customize_dashboard	Rebuild a dashboard with part of its embedded spec changed.
+data-visual	generate_dashboard	Interactive HTML dashboard. spec overrides detection; sources add tabs.
+data-visual	export_data	Export dataset to CSV, Excel, or JSON. Excel gets a README sheet.
+data-visual	customize_chart	Customize existing chart. changes: title labels colors annotations.
+data-workspace	create_workspace	Create workspace with data/working/trial/report dirs.
+data-workspace	open_workspace	Open workspace. Returns file aliases, pipeline history, active file.
+data-workspace	register_workspace_file	Add file to workspace with alias. stage: raw working trial output.
+data-workspace	list_workspace_files	List all workspace files with alias, stage, size, row count.
+data-workspace	save_workspace_pipeline	Save named pipeline template. ops: list of apply_patch op dicts.
+data-workspace	run_workspace_pipeline	Execute saved pipeline on file alias. Creates new output alias.
+filesystem	fs_query	Find files by name/content. content is literal unless regex=True.
+filesystem	fs_read	Read file content, tree, metadata, or diff. Bounded always.
+filesystem	fs_write	Write, edit, move, copy, download a URL, restore. Delete needs a token.
+filesystem	fs_index	Build/query/list file index or read operation receipt history.
+filesystem	fs_manage	Disk usage, permissions, symlink info, or snapshot version list.
+filesystem	fs_archive	Create or extract zip/tar.gz. path=archive, target=what goes in it.
+math	calculate	Evaluate arithmetic expression. Returns numeric result and steps.
+math	convert_units	Convert value between units. Returns converted result.
+math	solve	Solve equation for variable. Returns list of solutions.
+math	simplify	Simplify algebraic expression. Returns simplified form.
+math	diff	Differentiate expression. Returns derivative.
+math	integrate	Integrate expression. Returns indefinite or definite integral.
+math	describe	Compute descriptive statistics for a dataset. Returns summary.
+math	eval_latex	Evaluate LaTeX formula with variable substitution. Returns result.
+browser	browse_search	Web search (SearXNG/DDG/Brave). Returns <=10 hits.
+browser	browse_locate	Probe URL once, return detected mode + status.
+browser	browse_inspect	Peek URL: title + first ~500 chars. No DB write.
+browser	browse_fetch	Fetch + index URL. Returns surgical receipt.
+browser	browse_verify	Read one row from pages by URL.
+browser	browse_status	Engine health: pools, breaker, db.
+browser	browse_datetime	Current date, time, day-of-week, and timezone.
+browser	browse_extract	Extract elements by CSS/XPath/text/regex selector.
+browser	query_locate	List tables + row counts. Surgical.
+browser	query_search	FTS5 search across pages/news/files. <=10 rows.
+browser	query_select	SELECT-only SQL (parameterless). Bounded.
+browser	query_export	Export table to CSV/JSON. Returns path only.
+browser	query_stats	Per-table row counts + db_bytes.
+ml-basic	inspect_dataset	Inspect dataset schema, row count, dtypes, null summary.
+ml-basic	read_column_profile	Profile one column. Returns stats, null count, top values.
+ml-basic	search_columns	Search columns by condition. Returns names only, no data.
+ml-basic	read_rows	Read bounded row slice. Max rows enforced by hardware mode.
+ml-basic	train_classifier	Train classifier on CSV. model: lr svm rf dtc knn nb xgb.
+ml-basic	train_regressor	Train regressor on CSV. model: lir pr lar rr dtr rfr xgb.
+ml-basic	get_predictions	Run predictions with saved model. Returns bounded prediction list.
+ml-basic	restore_version	Restore file/model to previous snapshot. Empty timestamp = list.
+ml-basic	predict_single	Predict on one record: a JSON string or an object. No CSV needed.
+ml-basic	list_models	List saved .pkl models. Empty scans the server's model output dir.
+ml-basic	split_dataset	Split CSV into train/test CSV files and save both.
+ml-medium	run_preprocessing	Apply preprocessing ops to dataset. Snapshot before write.
+ml-medium	detect_outliers	Detect outliers in columns. feature_columns= also accepted. iqr or std.
+ml-medium	train_with_cv	Train with K-fold CV. Returns per-fold and mean scores.
+ml-medium	compare_models	Train multiple models, return sorted comparison table.
+ml-medium	run_clustering	Cluster dataset. algorithm: kmeans meanshift dbscan.
+ml-medium	read_receipt	Read operation history for a file. Returns log entries.
+ml-medium	generate_eda_report	Generate interactive HTML EDA report. theme: light dark.
+ml-medium	find_optimal_clusters	Find optimal K via elbow + silhouette. Saves HTML chart.
+ml-medium	anomaly_detection	Detect anomalies. method: isolation_forest lof.
+ml-medium	check_data_quality	Quality score 0-100, typed alerts. Pass target_column for leakage.
+ml-medium	evaluate_model	Score model on a labeled CSV, flag leakage. test_file_path= or file_path=.
+ml-medium	batch_predict	Predict all rows, save to CSV. No row limit. Returns output path.
+ml-advanced	tune_hyperparameters	Tune hyperparameters via grid or random search. search: grid random.
+ml-advanced	export_model	Export model + manifest. Pickle carries a 32-byte signature prefix.
+ml-advanced	read_model_report	Model metrics, feature importance, confusion matrix. Map summarised.
+ml-advanced	run_profiling_report	Generate Plotly HTML profile report for a dataset.
+ml-advanced	apply_dimensionality_reduction	Reduce dimensions with PCA or ICA. Saves reduced dataset.
+ml-advanced	generate_training_report	Generate HTML report: metrics, confusion matrix, feature importance.
+ml-advanced	plot_roc_curve	Plot ROC curve for classifier. Saves interactive HTML.
+ml-advanced	plot_learning_curve	Plot train vs val score by training size. HTML output.
+ml-advanced	plot_predictions_vs_actual	Scatter predicted vs actual for regression. HTML output.
+ml-advanced	generate_cluster_report	Generate HTML cluster visualization with PCA scatter and profile.
+office-docx-basic	get_document_outline	Return headings and paragraph indices — structural skeleton.
+office-docx-basic	get_document_index	Return section tree index. Zero paragraph content returned.
+office-docx-basic	fetch_section	Fetch one addressed section or paragraph. address: '§1' or '§1.p3'.
+office-docx-basic	read_document	Read full doc. Use get_document_index for large files (>10 pages).
+office-docx-basic	read_paragraph	Return one paragraph by paragraph_index, with full run detail. index= ok.
+office-docx-basic	read_paragraph_range	Return bounded paragraph range. Max 50 paragraphs.
+office-docx-basic	search_paragraphs	Scan paragraphs for matching text. Returns only matches.
+office-docx-basic	replace_text	Find text and replace in-place, preserving run formatting.
+office-docx-basic	insert_paragraph	Insert paragraph after index N. -1 inserts before the first paragraph.
+office-docx-basic	delete_paragraph	Delete a paragraph by index or by matching text content.
+office-docx-basic	append_text	Append a new paragraph at the end of the document.
+office-docx-basic	get_history	Return version snapshot history for a document.
+office-docx-basic	restore_version	Restore document to a previous snapshot. Optionally create git branch.
+office-docx-basic	diff_versions	Compare two document versions. timestamp_b defaults to current file.
+office-docx-basic	read_receipt	Show recent tool operations on this file. last_n: how many to show.
+office-docx-layout	set_heading	Apply Heading 1-6 style to paragraph N. level must be 1-6.
+office-docx-layout	set_font	Font on paragraph N: name size bold italic color(hex) spacing.
+office-docx-layout	set_paragraph_style	Apply named style from document gallery to paragraph N.
+office-docx-layout	add_image	Insert image into paragraph N. Formats: PNG, JPG, GIF, BMP, TIFF.
+office-docx-layout	set_page_margins	Set page margins in cm (top/bottom/left/right) for all sections.
+office-docx-layout	add_header_footer	Set header/footer. location: header footer. page_numbers adds PAGE.
+office-docx-layout	export_pdf	Export .docx to PDF (needs Word/LibreOffice). return_content=bytes.
+office-docx-new	create_document	Create blank .docx. return_content=True embeds file bytes (remote).
+office-docx-new	create_from_text	Create .docx from list of {text, style} paragraph dicts.
+office-docx-new	create_from_sections	Create structured .docx from [{heading, body, image}] sections.
+office-docx-new	list_block_kinds	Block kinds create_from_blocks accepts, with keys and an example each.
+office-docx-new	create_from_blocks	Typed blocks to a .docx. Call list_block_kinds() for the 12 kinds.
+office-docx-new	create_from_template	Copy template .docx, fill {key: value} substitutions, save.
+office-docx-new	create_letter	Create a formatted business letter .docx.
+office-docx-new	merge_documents	Merge multiple .docx files into one document.
+office-docx-new	batch_create_from_template	Generate N .docx files from a template + list of {key:value} dicts.
+office-docx-tables	list_tables	List all tables with row/column dimensions.
+office-docx-tables	read_table	Return the full 2-D cell array. Args: table_index (0-based).
+office-docx-tables	search_table_cells	Scan all table cells for matching text. Returns coordinates.
+office-docx-tables	read_table_row	Return one table row. Args: table_index, row (both 0-based).
+office-docx-tables	set_cell	Write text to one cell. Args: table_index, row, col, text.
+office-docx-tables	add_row	Append a row. Args: table_index, data (list of cell strings).
+office-docx-tables	delete_row	Remove a row; rows below shift up. Args: table_index, row.
+office-docx-tables	add_table	Insert table after paragraph N (-1 = first). Args: rows, cols, data.
+office-docx-tables	delete_table	Remove one table entirely. Args: table_index (0-based).
+office-docx-tables	set_cell_style	Shade/format cells. Hex colors. row/col -1 = all. band_fill stripes.
+office-pptx-basic	read_presentation	Read presentation index: slides, layouts, and structure.
+office-pptx-basic	read_slide	Read all shapes on one slide with name, type, and text.
+office-pptx-basic	search_slides	Search all slides for query text, return matching shapes.
+office-pptx-basic	read_slide_text	Return text of all shapes on one slide (no formatting).
+office-pptx-basic	set_text	Replace shape text using run-level editing.
+office-pptx-basic	add_slide	Append a slide with given layout, title, and body text.
+office-pptx-basic	delete_slide	Remove a slide by index.
+office-pptx-basic	reorder_slide	Move a slide from one position to another.
+office-pptx-basic	add_text_box	Add a text box to a slide at given position in inches.
+office-pptx-basic	diff_versions	Compare two presentation versions by snapshot timestamp.
+office-pptx-design	set_background	Set slide background to color/image. slide_index -1 = all slides.
+office-pptx-design	set_font_style	Set font on a shape. bold: "true", "false" or "" to leave.
+office-pptx-design	add_table	Insert a table with row/col data on a slide.
+office-pptx-design	add_chart	Add chart to slide. type: bar, line, pie. data: {categories, series}.
+office-pptx-design	duplicate_slide	Copy slide N to position insert_at (-1 = append at end).
+office-pptx-design	export_pdf	Export .pptx to PDF (needs LibreOffice/PowerPoint). Can embed bytes.
+office-pptx-design	add_image_to_all_slides	Add the same image (logo/watermark) to every slide at given position.
+office-pptx-design	set_font_all_slides	Set font on all slides. bold: "true", "false" or "" to leave.
+office-pptx-new	create_presentation	Create blank .pptx w/ title slide. return_content=True embeds bytes.
+office-pptx-new	create_from_outline	Create .pptx from [{title, content, layout}] slide list.
+office-pptx-new	create_deck_from_data	Create .pptx deck from title + [{heading, bullets}] list.
+office-pptx-new	create_from_template	Copy .pptx template, fill {key: value} substitutions, save.
+office-pptx-new	create_agenda	Create a meeting agenda .pptx from {topic,duration,owner} items.
+office-pptx-new	create_from_docx	Convert a Word document outline into a PowerPoint presentation.
+office-xlsx-basic	list_sheets	List all sheets with row and column dimensions.
+office-xlsx-basic	get_sheet_summary	Return sheet dimensions, header row, and first-column sample.
+office-xlsx-basic	read_cell	Return value, formula, and data type for one cell.
+office-xlsx-basic	read_cell_range	Return 2D cell array for range. Max 200 cells.
+office-xlsx-basic	search_cells	Scan cells for text matching query. Returns matching addresses.
+office-xlsx-basic	set_cell	Write a value to a single cell by address.
+office-xlsx-basic	set_range	Write a 2D list of values starting at start_cell.
+office-xlsx-basic	insert_row	Insert empty row at row_index (1-based), shifting rows down.
+office-xlsx-basic	delete_row	Remove row at row_index (1-based), shifting remaining rows up.
+office-xlsx-basic	add_sheet	Create a new worksheet with an optional name.
+office-xlsx-basic	sort_sheet	Sort sheet rows by column. column='A'. has_header skips row 1.
+office-xlsx-basic	rename_sheet	Rename sheet_name to new_name. old_name= accepted for sheet_name.
+office-xlsx-basic	find_duplicates	Find duplicate values in a column. Returns rows where value repeats.
+office-xlsx-basic	copy_sheet	Copy sheet_name to a new sheet new_name. source_sheet=/new_sheet_name= ok.
+office-xlsx-charts	add_chart	Create chart from data range. type: bar, line, pie, area, scatter.
+office-xlsx-charts	delete_chart	Remove chart by zero-based index from sheet.
+office-xlsx-charts	update_chart	Update chart title and/or data range by index.
+office-xlsx-charts	add_pivot_table	Sum values per rows group. cols optional: adds a second axis.
+office-xlsx-charts	set_cell_style	Style a cell: font, fill, format. bold: "true"/"false"/"".
+office-xlsx-formulas	set_formula	Write formula to cell. Formula must start with '='.
+office-xlsx-formulas	set_named_range	Define a named range in the workbook.
+office-xlsx-formulas	set_conditional_format	Apply color rule to range. rule: gt/lt/between/eq. color: green/red/yellow/blue.
+office-xlsx-formulas	set_data_validation	Add data validation to range. type: list, decimal, whole.
+office-xlsx-formulas	freeze_panes	Freeze rows/columns at cell. Empty string to unfreeze.
+office-xlsx-formulas	set_autofilter	Enable AutoFilter on header row range.
+office-xlsx-formulas	fill_formula_down	Fill formula down from start_cell to end_row, adjusting row refs.
+office-xlsx-formulas	auto_sum	Add SUM/AVERAGE/COUNT/MAX/MIN formula for a range into sum_cell.
+office-xlsx-formulas	convert_to_values	Replace formulas with their calculated values in a range.
+office-xlsx-new	create_workbook	Create blank .xlsx. return_content=True embeds file bytes (remote).
+office-xlsx-new	create_from_data	Create .xlsx from headers+rows. return_content=True embeds bytes.
+office-xlsx-new	create_report	Create multi-sheet .xlsx report from [{name,headers,rows}] list.
+office-xlsx-new	create_from_template	Copy .xlsx template, fill {key: value} substitutions, save.
+office-xlsx-new	create_from_csv	Import a CSV file into a new Excel workbook.
+office-xlsx-new	create_invoice	Create invoice .xlsx: items, totals, tax formula. tax_rate 0-1.
