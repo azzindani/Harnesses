@@ -74,6 +74,119 @@ error hint here is already the content such a tool would return.
 
 ---
 
+
+---
+
+# Triage of the 43 BROKEN rows
+
+Isolated to the BROKEN verdicts only — the 226 HELD rows were not re-checked.
+Every line below was re-called against the live deployment.
+
+## Confirmed
+
+### 3. `search_columns`' dtype filter does nothing (MCP_Machine_Learning)
+
+    Search columns by condition. Returns names only, no data
+
+`dtype="float64"` on `Ad_Data.csv` returns **all 16 columns** — `Date`,
+`product`, `phase` and the rest included — with `total_matched: 16`.
+`dtype="object"` also returns 16. `has_nulls=true` correctly returns 1.
+So the condition is ignored for `dtype` and honoured for `has_nulls`.
+
+**The sibling settles it.** `data-basic.search_columns`, same name and same
+claim in MCP_Data_Analyst, answers `dtype="float64"` with exactly the four
+numeric columns. One repo filters, the other does not, and the caller cannot
+tell: both say `success: true` and both "return names only".
+
+### 4. `fs_archive` writes a ZIP and calls it `.tar.gz` (MCP_File_System)
+
+    Create or extract zip/tar.gz. path=archive, target=what goes in it.
+
+`action=create` with `path=t.tar.gz`:
+
+    "format": "zip"
+    $ file t.tar.gz
+    t.tar.gz: Zip archive data, at least v2.0 to extract
+
+The bytes are a zip, the name says tar.gz, and `success: true`. tar.gz is
+advertised in the description, so a caller who asks for one gets a file that
+`tar -xzf` cannot open. The `format` field is honest and the filename is not,
+which is the wrong way round: the extension is what the next tool reads.
+
+### 5. `read_page` promises links it never returns (MCP_Documents)
+
+    Read one page: text, tables, links, and how each was obtained.
+
+Fields actually returned: `basis, bbox, columns, confidence, looks_tabular,
+message, of, op, page, progress, result, rotation, rows, shape, size, status,
+success, tables, text, token_estimate, words`. **No `links`.** Three of the
+four things the sentence names come back; the third does not exist.
+
+### 6. `find` says "not content" and returns content (MCP_Documents)
+
+    Locate text across a document. Returns page locations, not content.
+
+Every hit carries a `snippet` holding real document text
+(`"…one. (021) 235 88000 | Fax. (021) 235 88300 | Website : www"`). The
+snippets are wanted — they are how a caller decides which page to extract —
+so the code is right and the sentence is wrong. Deleting three words fixes it.
+
+### 7. `ocr` says a page range is required and does not require one (MCP_Documents)
+
+    Add a searchable text layer to scanned pages. Page range required.
+
+Called with no `pages`: `success: true`, `pages_ocred: 1`, `pages: "2"`. It
+defaults to the pages with no text layer, which is better behaviour than the
+description promises — and the description still turns a caller away from the
+call that works.
+
+### 8. Two docs-edit descriptions name a verb the tool will not accept
+
+    optimize:  Compress, repair or linearise a PDF.  -> action="linearise"
+               "'linearise' is not an action this tool has." Use: linearize.
+    protect:   Encrypt, decrypt, or clear a PDF's permission flags. -> action="clear"
+               "'clear' is not an action this tool has." Use: permissions.
+
+Both refusals are well-formed and name the right value, so a caller recovers on
+the second try. But in both cases the word the description uses is the word the
+tool rejects, and the description is the only place a caller looks first.
+
+## Minor — the description should say it, the code is fine
+
+* **`create_report` adds a Cover sheet nobody asked for.** Two sheets in,
+  `sheets_created: 3`. It is announced in `progress` ("2 data sheet(s) +
+  Cover"), so nothing is hidden; the description just does not mention it.
+* **`query_export` says "Returns path only"** and returns thirteen fields. The
+  intended contrast — the path rather than the exported rows — is true and
+  useful. Wording, not behaviour.
+
+## Plausible, NOT reproduced
+
+**`convert_to_values` may never convert a formula this server wrote.** The
+report has it returning `success: true`, `formulas_converted: 0`, and
+`skipped_no_cached_value` listing all nine cells, with a hint saying formulas
+written here are never calculated — openpyxl writes no cached value, so there
+is nothing to convert to. I could not reproduce it end to end because
+`set_formula` rejected my argument name and the range then held no formulas, so
+the tool correctly answered "that range holds no formula cells". The shape is
+right and the mechanism is believable. **Unverified; check before fixing.**
+
+## Dissolved
+
+| candidate | verdict |
+|---|---|
+| `detect_anomalies method=both` computes z-scores but never flags them | **No.** The written file has `spends_zscore_flag: 238 True` and `impressions_zscore_flag: 124 True`, matching `zscore_outliers` exactly. The sweep read `anomalies_only`, a filtered subset, and generalised from it. |
+| nine rows of "returns more fields than the description lists" (`probe`, `load_dataset`, `inspect_dataset`, `lag_correlation`, `regression_analysis`, `browse_status`, …) | **No.** An 80-character summary is not an exhaustive field list. Judge what the sentence claims, not what it omits. |
+| `generate_distribution_plot` "Samples above 5k" sampled exactly 5000 | **No.** The sentence means *samples when the data is above 5k*, not *takes a sample larger than 5k*. |
+| `restore_version` "No timestamp overwrites with the newest" | **No.** The behaviour matches; the sentence is ambiguous English and was read as "does not overwrite". Worth rewording. |
+| `fs_write` `delete_lines` / `patch_lines` need no token | **No.** "Delete needs a token" is about the delete op, not about editing lines. |
+| `cross_tabulate` / `value_counts` accept a numeric column | **No.** Treating a numeric column as categorical is a choice, and `value_counts` announces the extension change in `progress`. |
+| `concat_datasets` direction, `feature_engineering` auto | **Real vocabulary drift, same family as `statistical_test`** — the description says vertical/horizontal and auto; the tool takes rows/columns and four named types. Folded into finding 2 rather than counted separately. |
+
+**Score: 8 confirmed findings over 11 tools, 2 wording fixes, 1 unverified,
+the rest dissolved.** In line with the round-17 ratio, and the two that came
+from reading rather than from a report are still the two best.
+
 ## Not findings, recorded so they are not re-raised
 
 | candidate from the reports | verdict |
