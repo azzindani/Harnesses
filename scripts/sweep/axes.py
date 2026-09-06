@@ -1032,3 +1032,58 @@ AXES[26] = {
         "fsr2": "Archive a target that does not exist, and extract an archive that is not one.",
     },
 }
+
+
+AXES[27] = {
+    "name": "the argument you made up",
+    "why": (
+        "Round 27's root finding, re-asked so a machine confirms it rather than a script "
+        "asserting it. Every server moved to the official mcp SDK, whose bundled FastMCP builds "
+        "argument models with pydantic's extra='ignore'. An argument no tool declares was dropped "
+        "and the call succeeded: aggregate_dataset(agg_func='mean') returned SUMS under "
+        "success:true, train_regressor(feature_columns=[...]) trained on every column anyway, and "
+        "apply_patch(output_path='new.csv') edited the CALLER'S SOURCE FILE while reporting "
+        "success. Five repos lost that check in the migration without a line changing. "
+        "It is asked as an axis and not left to the verify script for one reason: a script "
+        "asserts the tools I thought to list, and this guard is installed per server, so the tool "
+        "nobody remembered is exactly the one that would still be silent."
+    ),
+    "main": (
+        "THE MAIN TASK OF THIS PHASE: send each tool an argument name it does not have, and "
+        "record whether it is REFUSED or silently ignored. "
+        "STEP ONE, call tools/list and read the parameter names each tool actually declares. "
+        "STEP TWO, for each tool make ONE call that is otherwise completely valid -- real file, "
+        "real required arguments, the call you would make to use the tool properly -- and add ONE "
+        "extra argument named 'definitely_not_a_parameter' with the value 1. "
+        "STEP THREE, record what came back. A correct server answers success:false with an error "
+        "naming 'definitely_not_a_parameter' and a hint listing the names the tool does accept. "
+        "Verdict REFUSED. A server that runs the call and returns a normal result has ignored it: "
+        "verdict IGNORED, and that is the finding. If the call fails for an unrelated reason -- a "
+        "missing file, a bad value -- fix the call and try again; a refusal that never mentions "
+        "your invented name is NOT a REFUSED. "
+        "STEP FOUR, for ONE tool per server, repeat with a NEAR MISS instead: take a real "
+        "parameter name and change it slightly (add a trailing underscore, or drop the last "
+        "letter). Record whether the hint suggests the right name. Verdict SUGGESTED or BARE. "
+        "Tools that take NO arguments at all are the interesting case and must not be skipped: "
+        "send them 'definitely_not_a_parameter' too. "
+        "Do NOT report a tool as IGNORED without pasting the response you got. An empty or "
+        "truncated response is not evidence of anything -- say so and move on."
+    ),
+    "unit": "tool",
+    "columns": (
+        "tool name | the valid call you made | REFUSED / IGNORED | the exact error text, or the "
+        "first line of the result it returned instead | did the hint list the accepted names? | "
+        "near miss tried (if any) and SUGGESTED / BARE | notes"
+    ),
+    "columns_ops": (
+        "op name | its TOOL's name | the valid call you made | REFUSED / IGNORED | the exact error "
+        "text, or the first line of the result it returned instead | did the hint list the "
+        "accepted names? | notes"
+    ),
+    "fs_extra": {
+        "fsw1": "fs_write takes ops, not a top-level action -- send the invented name at the TOP level, beside ops.",
+        "fsw2": "Also send an invented FIELD inside one op dict, and record both answers separately.",
+        "fsr1": "fs_read already refused an invented name before this round; confirm it still does.",
+        "fsr2": "fs_archive and fs_manage: the top level only.",
+    },
+}
