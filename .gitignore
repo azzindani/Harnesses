@@ -51,3 +51,6 @@ scripts/sweep/archive/
 # of backing a file up before editing it.
 *.bak
 *.bak.*
+
+# Round status files are runtime state, one per driver leg.
+scripts/sweep/STATUS_*.txt

@@ -1,0 +1,101 @@
+# Round 25 — the isolated re-check
+
+Round 24's axis, re-asked on the ten phases holding the sixteen tools its
+findings touched. Same question, so a description that was false and is now true
+should return **HELD** where it returned **BROKEN**.
+
+**45 → 10 phases, 61 rows, run 2026-09-06 07:58Z–12:01Z.**
+
+## The comparison
+
+| tool | r24 | r25 | |
+|---|---|---|---|
+| `find` | BROKEN | **HELD** | |
+| `read_page` | BROKEN | **HELD** | |
+| `optimize` | BROKEN | **HELD** | |
+| `protect` | BROKEN | **HELD** | |
+| `fs_archive` | BROKEN | **HELD** | |
+| `statistical_test` | BROKEN | **HELD** | |
+| `time_series_analysis` | BROKEN | **HELD** | |
+| `period_comparison` | BROKEN | **HELD** | |
+| `cohort_analysis` | BROKEN | **HELD** | |
+| `query_export` | BROKEN | **HELD** | |
+| `search_columns` | BROKEN | **HELD** | |
+| `create_report` | BROKEN | **HELD** | |
+| `ocr` | BROKEN | BROKEN | new claim |
+| `resample_timeseries` | BROKEN | BROKEN | new claim |
+| `feature_engineering` | BROKEN | BROKEN | new claim |
+| `concat_datasets` | BROKEN | BROKEN | new claim |
+
+**12 of 16 flipped.** Each of the four that did not was read row by row: none is
+a regression, and none re-states its round-24 claim. All four quote the *new*
+description correctly and then test something else.
+
+Two are worth quoting because they show the fix landing exactly as intended:
+
+    statistical_test | "Run a stat test. 17 available: an unknown 'test' lists
+    them all." | called test=unknown_test | HELD | Returns error with hint
+    listing exactly 17 valid tests
+
+An uninformed model discovered all seventeen tests from the description alone.
+Round 24 found eleven of them invisible to every caller.
+
+    create_report | "Multi-sheet .xlsx from [{name,headers,rows}], plus a Cover
+    sheet." | HELD | automatically added Cover sheet as promised
+
+## What an axis re-run could not do, again
+
+Every `dayfirst` tool came back HELD, and every one was called with
+`dayfirst=auto` — the valid value. **The refusal branch was never exercised**,
+3-for-3, which is the standing lesson holding: a model picks its own inputs and
+picks the branch the fix did not change. `verify_r24_shipped.sh` is what settles
+that, and did (`dayfirst='yes' refused`, refusal names all three).
+
+What the sweep contributes instead is the half no script can reach: **nothing
+nearby broke.** Trend, seasonality, cohort matrices, MoM comparison, the other
+five docs-read tools, the whole filesystem action set — all still HELD.
+
+## Three new findings, all round 24's own family
+
+The re-check found the same disease in tools round 24 had passed:
+
+* **`resample_timeseries` lists five aggregations and accepts nine.** The
+  description says `agg: sum mean count min max`; `median` succeeds, and the
+  real set is `first, last, median, min, max, mean, std, sum, count`. This is
+  `statistical_test` exactly — a vocabulary written down twice where the copies
+  drifted — in a tool nobody had checked.
+* **`feature_engineering`'s `one_hot` silently skips columns.** More than 10
+  distinct values, or beyond the first 5 eligible columns, and the column is
+  dropped from the encoding. The progress messages say so at call time (*"above
+  the 10 one-hot allows"*), so it is declared — just not before you call.
+* **`concat_datasets` column-mode requires equal row counts.** Unstated in the
+  description. Weakest of the three: it refuses cleanly and the error names the
+  counts (`Got: [3, 1]`), so only the pre-warning is missing.
+
+## One to verify before believing
+
+**`ocr` reported a timeout and wrote a complete file anyway.** Both calls
+returned MCP error `-32001` while the output grew 912KB → 3.9MB, which looks
+like OCR running to completion behind a client-side timeout. A caller told the
+call failed, with a valid file on disk, would retry and OCR twice.
+
+**Not confirmed, and the environment is a confound**: this box ran the round at
+load average 12.95 on four cores, and this repo's own OCR test carries a
+docstring about timing out under exactly that condition against ~4 seconds
+idle. Verify on a quiet machine before treating it as a defect.
+
+## Provider notes
+
+Three models and two quota walls for ten phases. `nemotron-3-ultra-free` ran
+phases 4–14 then hit OpenCode Zen's daily cap — which, unlike OpenRouter's,
+says so in the status bar (*"Free usage exceeded, subscribe to Go [retrying in
+12h 52m]"*) and cost phases 15, 16 and 22. `muse-spark-1.3-contributor-free`
+had recovered from its own cap 12 hours earlier and answered, then
+`nvidia/nemotron-3-super-120b-a12b:free` on OpenRouter — whose daily quota had
+reset overnight — finished all five remaining phases in 50 minutes with zero
+rate limits.
+
+**Each switch needs a new session, not new config**, and the sweep container's
+accumulated context is itself a reason to restart: the session that ran round 24
+held 45 phases of the *old* descriptions, and a model that has already read
+"Page range required" is not the uninformed caller this round is testing.
