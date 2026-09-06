@@ -9,6 +9,45 @@ Caddy routes) may still change between minor releases.
 
 ## [Unreleased]
 
+### Added
+
+- **`SWEEP_MCP_DISABLED`** — the sweep container's own hidden-mount list, empty
+  by default. `.env`'s `MCP_DISABLED` scopes the *personal* harness, and the
+  sweep must never follow it, but empty also registered `folio`, which is not
+  one of the repos under test. Set to `folio` for rounds 24-26, leaving 27
+  servers: the 26 endpoints plus the `web` sidecar.
+- **`scripts/sweep/monitor_round.sh`** — watches a round and writes one status
+  line, exiting when the round ends, the driver dies, or nothing completes for
+  ~48 minutes. `setsid`-detached like the driver, because a Claude Code
+  background task gets reaped by the host's low-memory guard while the detached
+  driver beside it never notices — that happened twice in one round. The log is
+  an argument: round 25 needed three of these in a day, one per provider switch,
+  and sed-copying the script per log left four near-identical files free to
+  drift apart.
+- **`AXES[24]`, `[25]`, `[26]`** — "believe the description", the same axis
+  re-asked where the descriptions had changed, and "the call that failed and
+  wrote anyway".
+- **`verify_r24_shipped.sh`, `verify_r25_fixes.sh`** — the per-round direct-MCP
+  checks, and round 25 is the argument for them: re-asking the axis flipped 12
+  of 16 fixed tools from BROKEN to HELD, but every `dayfirst` tool was called
+  with the *valid* value, so the refusal the fix added was never exercised. A
+  model picks the branch the fix did not change.
+- **`descriptions_r24.tsv` / `_r25.tsv`** — every tool's description frozen at
+  launch, as a grading key. It earned itself on round 24's first four phases,
+  catching a model that had invented a per-op description for `fs_write` and
+  then scored its own inventions BROKEN.
+
+### Changed
+
+- `scripts/sweep/README.md` documents the `harness-sweep` container, both of its
+  variables, how the three providers fail differently when their free quota runs
+  out, and why a model switch needs a new session rather than new config.
+- `AXES[24]`'s `columns_ops` names the *tool's* description rather than asking
+  for one per op. Six File_System tools carry ~50 ops behind one 70-character
+  sentence each, and asking for "the sentence that covers this op" produced
+  fabrications.
+
+
 ## [0.1.1] — 2026-09-01
 
 ### Added

@@ -66,6 +66,77 @@ sweep found five tools whose second identical call wrote a second file.
 - File_System is covered as named operations, not as six tool calls — its six
   tools carry a dozen operations each behind an `op`/`action` argument.
 
+## Where a round runs — `harness-sweep`
+
+The sweep drives its **own** opencode container, not the operator's. Same image
+and entrypoint as `harness-opencode`, its own state directory, so a 45-phase
+coverage round can never spend the paid subscription living in the personal
+harness's `opencode.db`. `run_sweep.sh` defaults to it; `SWEEP_CONTAINER=` picks
+another.
+
+It is deliberately absent from `auth/server.py`'s `HARNESSES`, so the idle
+sweeper cannot stop it mid-round and `IDLE_EXEMPT` is irrelevant to it. Two
+variables are its own, and both exist so scoping the personal harness never
+scopes the sweep:
+
+| variable | empty means | why |
+|---|---|---|
+| `SWEEP_MODEL` | the OpenRouter `lab` route from `PROVIDER_*` + `MODEL_NAME` | set it to one of opencode's own `*-free` ids to ride out a quota day |
+| `SWEEP_MCP_DISABLED` | nothing hidden | `.env`'s `MCP_DISABLED` scopes the *personal* harness; the sweep must see every repo under test |
+
+Set `SWEEP_MCP_DISABLED=folio` — it is not one of the seven repos under test, no
+phase names it, and empty otherwise registers it. That leaves 27 servers: the 26
+endpoints plus the `web` sidecar, which stays because it is the research leg
+when browser is out.
+
+It is disposable. `docker compose rm -sf harness-sweep` between rounds costs
+nothing: the reports are written to the shared `data/` mount, not inside it.
+**Never delete the image** — `harness-opencode:latest` is shared with the
+personal harness.
+
+## Switching model mid-round
+
+Every free tier here runs out, and the three failures look different:
+
+* **OpenRouter is silent.** Nothing on screen; the driver logs "typed in full
+  but would not submit", which is also what a modal and a starved TUI look like.
+  The only evidence is inside the container:
+
+      docker exec harness-sweep sh -c \
+        'grep -i "rate limit" /root/.local/share/opencode/log/opencode.log' | tail -3
+
+* **OpenCode Zen says so**, in the status bar: `Free usage exceeded, subscribe
+  to Go [retrying in 12h 52m attempt #1]`.
+* Sometimes the pane shows `Provider returned error [retrying in Ns attempt #5]`
+  with the box idle.
+
+**Zen's quota is per model, so recovery is to switch, not to wait** — round 25
+went `nemotron-3-ultra-free` → `muse-spark-1.3-contributor-free` → OpenRouter's
+`nemotron-3-super` in a day, and each switch answered immediately.
+
+**A switch needs a new session, not new config.** Stop the container, move
+`history/sweep/state/opencode.db*` aside, restart, and confirm with
+`grep -oE 'modelID=[^ ]*'` on the container's log — **never the footer**, which
+has shown a new name on a reply the old model served.
+
+A fresh session is worth it for a second reason: an accumulated session is not
+an uninformed caller. Round 25 re-asked round 24's question about descriptions
+that had since been fixed, and the old session held 45 phases of the *old*
+descriptions.
+
+## monitor_round.sh — watching without owning the round
+
+    setsid nohup ./monitor_round.sh <driver-pid> sweep_r25c.log >> m.log 2>&1 </dev/null &
+
+Writes one line to `STATUS_<log stem>.txt` and exits when the round ends, the
+driver dies, or nothing completes for ~48 minutes. `setsid`, like the driver,
+because a Claude Code background task gets reaped by the host's low-memory guard
+while the detached driver beside it never notices.
+
+The log is an argument because round 25 needed three of these in a day, one per
+provider switch; sed-copying the script per log left four near-identical files
+free to drift apart.
+
 ## verify_n1.sh — confirming a round's fixes reached the endpoints
 
 A round produces fixes; the fixes need a re-check, and that re-check should not
@@ -94,3 +165,21 @@ from perfectly well:
 Copy the pattern for the next axis rather than extending this file: a check that
 names the specific string a specific fix introduced stops being meaningful once
 that fix is old.
+
+`verify_r24_shipped.sh` and `verify_r25_fixes.sh` are the current examples, and
+round 25 showed exactly why they are not optional. Re-asking the axis on the
+fixed tools flipped 12 of 16 from BROKEN to HELD — but every `dayfirst` tool was
+called with `dayfirst=auto`, the *valid* value, so the refusal the fix added was
+never exercised. Three for three. **A model picks its own inputs and picks the
+branch the fix did not change.** The verify script settles that in seconds and
+cannot be defeated by a provider outage.
+
+What the sweep gives that the script cannot is the other half: whether the fix
+broke anything nearby, and whether the new sentence actually helps an uninformed
+caller. Round 25's best row is that half working —
+
+    statistical_test | "17 available: an unknown 'test' lists them all."
+    | called test=unknown_test | HELD | hint listing exactly 17 valid tests
+
+— a model discovering all seventeen tests from the description alone, where
+round 24 had found eleven of them invisible to every caller.
