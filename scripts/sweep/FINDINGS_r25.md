@@ -72,6 +72,23 @@ The re-check found the same disease in tools round 24 had passed:
   description. Weakest of the three: it refuses cleanly and the error names the
   counts (`Got: [3, 1]`), so only the pre-warning is missing.
 
+## Fixed 2026-09-06 — MCP_Data_Analyst `8cb3767`
+
+All three shipped, CI green, deployed, and asserted on the live server by
+`verify_r25_fixes.sh` (4/4). `resample_timeseries` now names all nine
+aggregations, and a test reads `_VALID_AGGS` and fails if the sentence and the
+set ever separate again. `concat_datasets` states the equal-row-count
+constraint its refusal already named. `feature_engineering` says `one_hot` is
+capped, with a test holding the response to naming which columns were skipped
+and why.
+
+The root cause of the first is worth keeping: **its description carried
+`compute_aggregations`' vocabulary**, not its own. Five words that were correct
+somewhere else.
+
+`verify_r24_shipped.sh` still passes 16/16 and all 26 endpoints negotiate, so
+nothing regressed.
+
 ## One to verify before believing
 
 **`ocr` reported a timeout and wrote a complete file anyway.** Both calls
