@@ -1,15 +1,23 @@
 #!/usr/bin/env bash
-# Round 24's end-condition watch, as a detached process rather than a Claude
+# A round's end-condition watch, as a detached process rather than a Claude
 # Code background task. Two of those were reaped in a row by the host's
-# low-memory guard -- the same reason run_sweep.sh itself has always been
-# launched with setsid. Writes one status line to STATUS and exits when the
-# round ends, the driver dies, or nothing completes for ~48 minutes.
+# low-memory guard while the setsid-launched driver beside them never noticed --
+# the same reason run_sweep.sh has always been launched with setsid.
+#
+#     setsid nohup ./monitor_round.sh <driver-pid> sweep_r25c.log >> m.log 2>&1 </dev/null &
+#
+# Takes the log as an argument because round 25 needed three of these in a day,
+# one per provider switch, and sed-copying the script per log left four
+# near-identical files that could drift apart.
+#
+# Writes one status line to STATUS_<log stem>.txt and exits when the round ends,
+# the driver dies, or nothing completes for ~48 minutes.
 set -uo pipefail
 SP="$(cd "$(dirname "$0")" && pwd)"
 cd "$SP"
-DPID=${1:?usage: monitor_r24c.sh <driver-pid>}
-LOG=sweep_r24c.log
-STATUS=$SP/STATUS_r24.txt
+DPID=${1:?usage: monitor_round.sh <driver-pid> [log]}
+LOG=${2:-sweep.log}
+STATUS="$SP/STATUS_${LOG%.log}.txt"
 last=""; stall=0
 for _ in $(seq 1 300); do
   if grep -qE 'SWEEP COMPLETE|WROTE NOTHING — STOPPING|FIXTURE MUTATED' "$LOG" 2>/dev/null; then

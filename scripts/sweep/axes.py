@@ -950,3 +950,19 @@ AXES[24] = {
         ),
     },
 }
+
+
+# Round 25 is round 24's axis pointed at the tools round 24's findings touched.
+# The question is unchanged on purpose: if a description was false and is now
+# true, the same axis asked the same way should return HELD where it returned
+# BROKEN, and a model reading only the new sentence should be able to work out
+# the call it could not work out before.
+#
+# What this can and cannot do. It cannot PROVE a fix -- a model picks its own
+# inputs and picks the branch the fix did not change, which was 4-for-4 in one
+# round; verify_r24_shipped.sh is the proof and it runs without a model. What it
+# can do is the part no script can: judge whether the new sentence actually helps
+# an uninformed caller, and catch what the fix broke NEARBY, since every phase
+# still exercises all of its tools rather than only the fixed one.
+AXES[25] = dict(AXES[24])
+AXES[25]["name"] = "believe the description (re-asked where it changed)"
