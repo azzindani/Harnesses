@@ -966,3 +966,69 @@ AXES[24] = {
 # still exercises all of its tools rather than only the fixed one.
 AXES[25] = dict(AXES[24])
 AXES[25]["name"] = "believe the description (re-asked where it changed)"
+
+
+AXES[26] = {
+    "name": "the call that failed and wrote anyway",
+    "why": (
+        "Round 25 left one finding unsettled: ocr returned MCP error -32001, a timeout, while "
+        "the output file it was writing grew from 912KB to 3.9MB -- which looks like the work "
+        "running to completion behind a client that had stopped waiting. A caller told the call "
+        "failed, with a complete artifact on disk they cannot see, does the only sensible thing "
+        "and retries, and the work happens twice. Nothing in CI can see this: the tool under "
+        "test did not fail, the transport did, and the assertion everyone writes is about the "
+        "response. It generalises past ocr -- any long write on a slow box can end this way, and "
+        "the question of what the caller is left holding has never been asked of this fleet."
+    ),
+    "main": (
+        "THE MAIN TASK OF THIS PHASE: make each tool FAIL, then look at what it left behind. "
+        "A tool that reports an error and still writes a complete, usable file is the finding "
+        "this round is for, because the caller will retry and do the work twice. "
+        "STEP ONE, list your scratch directory and record it, so you can say exactly what "
+        "appeared later. "
+        "STEP TWO, for each tool make ONE call you expect to fail, and prefer a failure the tool "
+        "cannot argue with: a source that does not exist, an argument outside what the "
+        "description allows, an output path in a directory that is not there, a page range past "
+        "the end of the document. If the tool has a long or heavy mode, also try the honest "
+        "version of it on the biggest input available, because a client-side timeout is the case "
+        "this round was written for -- record the exact error text and code, including any -32001 "
+        "or 'timed out'. "
+        "STEP THREE, immediately list the scratch directory again and diff it against step one. "
+        "For every file that appeared, say how big it is, and OPEN IT with a read tool to say "
+        "whether it is complete and usable or a truncated stub. 'A file appeared' is not the "
+        "finding; 'a COMPLETE file appeared after the caller was told the call failed' is. "
+        "STEP FOUR, having been told it failed, do what a caller does: CALL IT AGAIN, exactly "
+        "the same way. Then say whether the second call did the work a second time, whether it "
+        "left a second file or overwrote the first, and whether anything in either response "
+        "would have told the caller the first attempt had actually finished. "
+        "Record each tool as CLEAN (failed and left nothing, or left an obvious stub), ORPHAN "
+        "(failed and left a complete usable artifact), or NO-FAIL (you could not make it fail; "
+        "say what you tried). ORPHAN is the finding. "
+        "Do not report a refusal that writes nothing as a defect -- that is the contract working, "
+        "and it is the answer most tools should give. Timing numbers are not findings on their "
+        "own; what a duration means here is only whether the work finished. "
+        "Document tools take a document: use /workspace/data/BBCA_filing.pdf, a real 183-page "
+        "filing, and do not modify or delete it -- write every output under your own scratch "
+        "directory. It is deliberately the biggest input here, because the slow path is the point. "
+        "Two contracts that are deliberate, so they are not findings: one server answers ok "
+        "rather than success and carries no op or token_estimate; and bold and italic are the "
+        'quoted strings "true", "false" and "" rather than JSON booleans. '
+    ),
+    "unit": "failure",
+    "columns": (
+        "tool name | the failure you produced | the exact error text and code | what appeared on "
+        "disk, and its size | is that artifact complete and usable? | CLEAN / ORPHAN / NO-FAIL | "
+        "what a second identical call did | notes"
+    ),
+    "columns_ops": (
+        "op name | the failure you produced | the exact error text and code | what appeared on "
+        "disk, and its size | is that artifact complete and usable? | CLEAN / ORPHAN / NO-FAIL | "
+        "what a second identical call did | notes"
+    ),
+    "fs_extra": {
+        "fsw1": "Make each op fail on a path that does not exist, then check nothing was created.",
+        "fsw2": "download from a URL that 404s is the interesting one: check whether a partial file is left.",
+        "fsr1": "Read a path that does not exist, and a directory as if it were a file.",
+        "fsr2": "Archive a target that does not exist, and extract an archive that is not one.",
+    },
+}
