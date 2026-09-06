@@ -65,51 +65,51 @@ overwrites a verdict a person typed.
 
 | phase | label | report | tools | rows | verdict |
 |---|---|---|---:|---|---|
-| 1 | filesystem: fs_write, part 1 | `report_r24_fs_write_1.md` | 8 | 8 | **INVALID** — quoted descriptions fabricated |
-| 2 | filesystem: fs_write, part 2 | `report_r24_fs_write_2.md` | 8 | 8 | **INVALID** — quoted descriptions fabricated |
-| 3 | filesystem: fs_read modes and fs_query | `report_r24_fs_read.md` | 7 | 6 | **INVALID** — quoted descriptions fabricated |
-| 4 | filesystem: fs_index, fs_manage, fs_archive | `report_r24_fs_actions.md` | 8 | 13 | **INVALID** — quoted descriptions fabricated |
+| 1 | filesystem: fs_write, part 1 | `report_r24b_fs_write_1.md` | 8 | 8 | PASS |
+| 2 | filesystem: fs_write, part 2 | `report_r24b_fs_write_2.md` | 8 | 8 | PASS |
+| 3 | filesystem: fs_read modes and fs_query | `report_r24b_fs_read.md` | 7 | 7 | PASS |
+| 4 | filesystem: fs_index, fs_manage, fs_archive | `report_r24b_fs_actions.md` | 8 | 14 | PASS |
 | 5 | docs-read | `report_r24_docs_read.md` | 7 | 7 | PASS |
 | 6 | docs-edit | `report_r24_docs_edit.md` | 6 | 6 | PASS |
 | 7 | data-basic, part 1 | `report_r24_data_basic_1.md` | 5 | 5 | PASS |
 | 8 | data-basic, part 2 | `report_r24_data_basic_2.md` | 4 | 4 | PASS |
 | 9 | data-ingest, part 1 | `report_r24_data_ingest_1.md` | 5 | 5 | PASS |
-| 10 | data-ingest, part 2 | `report_r24_data_ingest_2.md` | 5 | 3 | **UNFINISHED** (3/5) |
+| 10 | data-ingest, part 2 | `report_r24b_data_ingest_2.md` | 5 | 5 | PASS |
 | 11 | data-medium, part 1 | `report_r24_data_medium_1.md` | 6 | 6 | PASS |
 | 12 | data-medium, part 2 | `report_r24_data_medium_2.md` | 5 | 4 | **UNFINISHED** (4/5) |
 | 13 | data-statistics, part 1 | `report_r24_data_statistics_1.md` | 6 | 6 | PASS |
 | 14 | data-statistics, part 2 | `report_r24_data_statistics_2.md` | 6 | 6 | PASS |
 | 15 | data-transform, part 1 | `report_r24_data_transform_1.md` | 5 | 5 | PASS |
-| 16 | data-transform, part 2 | `report_r24_data_transform_2.md` | 5 | 5 | **INVALID** — 5 rows, none of its 5 tools |
+| 16 | data-transform, part 2 | `report_r24b_data_transform_2.md` | 5 | 5 | PASS |
 | 17 | data-visual, part 1 | `report_r24_data_visual_1.md` | 7 | 7 | PASS |
-| 18 | data-visual, part 2 | `report_r24_data_visual_2.md` | 6 | 5 | **UNFINISHED** (5/6) |
-| 19 | data-workspace | `report_r24_data_workspace.md` | 6 |  | **DRY** |
-| 20 | math | `report_r24_math.md` | 8 |  | **DRY** |
-| 21 | browser, part 1 | `report_r24_browser_1.md` | 7 |  | **DRY** |
-| 22 | browser, part 2 | `report_r24_browser_2.md` | 6 |  | NOT REACHED |
-| 23 | ml-basic, part 1 | `report_r24_ml_basic_1.md` | 6 |  | NOT REACHED |
-| 24 | ml-basic, part 2 | `report_r24_ml_basic_2.md` | 5 |  | NOT REACHED |
-| 25 | ml-medium, part 1 | `report_r24_ml_medium_1.md` | 6 |  | NOT REACHED |
-| 26 | ml-medium, part 2 | `report_r24_ml_medium_2.md` | 6 |  | NOT REACHED |
-| 27 | ml-advanced, part 1 | `report_r24_ml_advanced_1.md` | 5 |  | NOT REACHED |
-| 28 | ml-advanced, part 2 | `report_r24_ml_advanced_2.md` | 5 |  | NOT REACHED |
-| 29 | office-docx-basic, part 1 | `report_r24_office_docx_basic_1.md` | 8 |  | NOT REACHED |
-| 30 | office-docx-basic, part 2 | `report_r24_office_docx_basic_2.md` | 7 |  | NOT REACHED |
-| 31 | office-docx-layout | `report_r24_office_docx_layout.md` | 7 |  | NOT REACHED |
-| 32 | office-docx-new, part 1 | `report_r24_office_docx_new_1.md` | 5 |  | NOT REACHED |
-| 33 | office-docx-new, part 2 | `report_r24_office_docx_new_2.md` | 4 |  | NOT REACHED |
-| 34 | office-docx-tables, part 1 | `report_r24_office_docx_tables_1.md` | 5 |  | NOT REACHED |
-| 35 | office-docx-tables, part 2 | `report_r24_office_docx_tables_2.md` | 5 |  | NOT REACHED |
-| 36 | office-pptx-basic, part 1 | `report_r24_office_pptx_basic_1.md` | 5 |  | NOT REACHED |
-| 37 | office-pptx-basic, part 2 | `report_r24_office_pptx_basic_2.md` | 5 |  | NOT REACHED |
-| 38 | office-pptx-design | `report_r24_office_pptx_design.md` | 8 |  | NOT REACHED |
-| 39 | office-pptx-new | `report_r24_office_pptx_new.md` | 6 |  | NOT REACHED |
-| 40 | office-xlsx-basic, part 1 | `report_r24_office_xlsx_basic_1.md` | 7 |  | NOT REACHED |
-| 41 | office-xlsx-basic, part 2 | `report_r24_office_xlsx_basic_2.md` | 7 |  | NOT REACHED |
-| 42 | office-xlsx-charts | `report_r24_office_xlsx_charts.md` | 5 |  | NOT REACHED |
-| 43 | office-xlsx-formulas, part 1 | `report_r24_office_xlsx_formulas_1.md` | 5 |  | NOT REACHED |
-| 44 | office-xlsx-formulas, part 2 | `report_r24_office_xlsx_formulas_2.md` | 4 |  | NOT REACHED |
-| 45 | office-xlsx-new | `report_r24_office_xlsx_new.md` | 6 |  | NOT REACHED |
+| 18 | data-visual, part 2 | `report_r24b_data_visual_2.md` | 6 | 6 | PASS |
+| 19 | data-workspace | `report_r24b_data_workspace.md` | 6 | 6 | PASS |
+| 20 | math | `report_r24b_math.md` | 8 | 8 | PASS |
+| 21 | browser, part 1 | `report_r24b_browser_1.md` | 7 | 7 | PASS |
+| 22 | browser, part 2 | `report_r24b_browser_2.md` | 6 | 6 | PASS |
+| 23 | ml-basic, part 1 | `report_r24b_ml_basic_1.md` | 6 | 6 | PASS |
+| 24 | ml-basic, part 2 | `report_r24b_ml_basic_2.md` | 5 | 5 | PASS |
+| 25 | ml-medium, part 1 | `report_r24b_ml_medium_1.md` | 6 | 6 | PASS |
+| 26 | ml-medium, part 2 | `report_r24b_ml_medium_2.md` | 6 | 6 | PASS |
+| 27 | ml-advanced, part 1 | `report_r24b_ml_advanced_1.md` | 5 | 5 | PASS |
+| 28 | ml-advanced, part 2 | `report_r24b_ml_advanced_2.md` | 5 | 5 | PASS |
+| 29 | office-docx-basic, part 1 | `report_r24b_office_docx_basic_1.md` | 8 | 8 | PASS |
+| 30 | office-docx-basic, part 2 | `report_r24b_office_docx_basic_2.md` | 7 | 7 | PASS |
+| 31 | office-docx-layout | `report_r24b_office_docx_layout.md` | 7 | 7 | PASS |
+| 32 | office-docx-new, part 1 | `report_r24b_office_docx_new_1.md` | 5 | 5 | PASS |
+| 33 | office-docx-new, part 2 | `report_r24b_office_docx_new_2.md` | 4 | 4 | PASS |
+| 34 | office-docx-tables, part 1 | `report_r24b_office_docx_tables_1.md` | 5 | 5 | PASS |
+| 35 | office-docx-tables, part 2 | `report_r24b_office_docx_tables_2.md` | 5 | 5 | PASS |
+| 36 | office-pptx-basic, part 1 | `report_r24b_office_pptx_basic_1.md` | 5 | 5 | PASS |
+| 37 | office-pptx-basic, part 2 | `report_r24b_office_pptx_basic_2.md` | 5 | 5 | PASS |
+| 38 | office-pptx-design | `report_r24b_office_pptx_design.md` | 8 | 8 | PASS |
+| 39 | office-pptx-new | `report_r24b_office_pptx_new.md` | 6 | 6 | PASS |
+| 40 | office-xlsx-basic, part 1 | `report_r24b_office_xlsx_basic_1.md` | 7 | 7 | PASS |
+| 41 | office-xlsx-basic, part 2 | `report_r24b_office_xlsx_basic_2.md` | 7 | 7 | PASS |
+| 42 | office-xlsx-charts | `report_r24b_office_xlsx_charts.md` | 5 | 5 | PASS |
+| 43 | office-xlsx-formulas, part 1 | `report_r24b_office_xlsx_formulas_1.md` | 5 | 5 | PASS |
+| 44 | office-xlsx-formulas, part 2 | `report_r24b_office_xlsx_formulas_2.md` | 4 | 4 | PASS |
+| 45 | office-xlsx-new | `report_r24b_office_xlsx_new.md` | 6 | 6 | PASS |
 
 ## State at the quota stop — 2026-09-05
 
@@ -139,3 +139,27 @@ never reached. Log `sweep_r24.log`, 43 rate-limit lines in the container's own l
   said PASS and the phase did none of its work.
 
 **Two findings confirmed by hand, without a model** — see `FINDINGS_r24.md`.
+
+## Closed 2026-09-06T05:47:09Z
+
+**45 of 45 phases reported, 44 at full coverage, 273 rows over 268 tool-slots.**
+`check_coverage.py` finds **no tool named in a phase and absent from its report**
+in any of the 34 re-run reports. The one shortfall is phase 12 at 4 of 5.
+
+Verdicts across the authoritative report for each phase:
+**226 HELD, 43 BROKEN, 3 VAGUE** — 272 scored.
+
+Three models and three quota walls to get there:
+
+| leg | model | phases | ended by |
+|---|---|---|---|
+| r24 | OpenRouter `nemotron-3-super-120b-a12b:free` | 1-18 (5 later voided) | free-models-per-day, 18:22Z |
+| r24b | OpenCode Zen `muse-spark-1.3-contributor-free` | 1-4, 10, 16, 18-22 | per-model rate limit, 23:10Z |
+| r24c | OpenCode Zen `nemotron-3-ultra-free` | 23-45 | ran to completion, 0 rate limits |
+
+The fixtures came through untouched — `Ad_Data.csv`, `BBCA_filing.pdf` and
+`BBCA_instance.zip` all still match the md5s staged before launch.
+
+**43 BROKEN rows are candidates, not defects.** Round 17 confirmed 2 of 9 and
+round 23b ruled out 4 of 6; the two already confirmed here are in
+`FINDINGS_r24.md`. Triage is the remaining work.
