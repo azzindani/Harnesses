@@ -208,3 +208,35 @@ It is worth saying plainly that **`descriptions_r24.tsv` caught this on the
 round's first four phases**, which is the entire argument for freezing the
 descriptions at launch. Without the key, eight fabricated quotes and a dozen
 BROKEN verdicts read exactly like findings.
+
+
+---
+
+# Shipped 2026-09-06
+
+All eight confirmed findings and both wording fixes, across six repos. Each
+commit carries the evidence; `verify_r24_shipped.sh` asserts every one of them
+against the deployed servers with no model involved — **16/16 PASS**, and 26/26
+endpoints still negotiate.
+
+| repo | head | fix |
+|---|---|---|
+| Data_Analyst | `abdef7b` | `dayfirst` refuses what it does not document; three drifted vocabularies |
+| Machine_Learning | `aba0de7` | `search_columns` dtype filter actually filters |
+| File_System | `36b89bc` | `fs_archive` honours the extension |
+| Documents | `80af92e` | five sentences that were not true |
+| Microsoft_Office | `ff39b88` | `create_report` declares its Cover sheet |
+| Web_Browser | `ee51ba9` | `query_export` says what it meant |
+
+Suites after: DA 2898, ML 1900, Office 2170, Documents 428, Browser 243,
+File_System 712 — all both modes, ruff, format, pyright and the docstring
+census clean in all six, CI green on all six.
+
+**One correction worth keeping.** The first `dayfirst` fix refused unknown
+values but kept `"yes"`, `"no"`, `"1"` and `"0"` as silent aliases, on the
+reasoning that a JSON boolean arrives as a string. The live check caught it:
+`dayfirst="yes"` was still accepted and still chose day-first, which is the
+finding itself one draft smaller. The accepted set is now exactly the
+documented three. **The lesson is the round's own: a fix verified only by its
+own tests is verified against the author's reading of the contract, not against
+the contract.** The tests passed; the deployed server was still wrong.
