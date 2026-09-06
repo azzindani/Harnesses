@@ -89,17 +89,45 @@ somewhere else.
 `verify_r24_shipped.sh` still passes 16/16 and all 26 endpoints negotiate, so
 nothing regressed.
 
-## One to verify before believing
+## `ocr` — investigated and CLOSED, not a defect (2026-09-06)
 
-**`ocr` reported a timeout and wrote a complete file anyway.** Both calls
-returned MCP error `-32001` while the output grew 912KB → 3.9MB, which looks
-like OCR running to completion behind a client-side timeout. A caller told the
-call failed, with a valid file on disk, would retry and OCR twice.
+Round 25 reported `ocr` returning MCP error `-32001` while its output grew
+912KB → 3.9MB, which reads like work completing behind a caller who was told it
+failed. Chased three ways; the server is not at fault.
 
-**Not confirmed, and the environment is a confound**: this box ran the round at
-load average 12.95 on four cores, and this repo's own OCR test carries a
-docstring about timing out under exactly that condition against ~4 seconds
-idle. Verify on a quiet machine before treating it as a defect.
+**An isolated single-phase round (26) did not reproduce it.** A focused axis --
+"make each tool fail, then look at what it left behind", verdicts CLEAN /
+ORPHAN / NO-FAIL -- ran phase 6 alone. The model produced its failures with a
+non-existent source for all six tools and scored **6 CLEAN, 0 ORPHAN**. It
+never went near the heavy path, which is the third time in two rounds that a
+model has picked the branch the question was about and missed it.
+
+**A deliberate client abort leaves nothing.** `ocr` on the 183-page filing with
+a 10-second client timeout: `curl rc=28`, no response, and the output directory
+empty — still empty 90 seconds later. A dropped client does not leave a partial
+file.
+
+**The code says why.** `_edit_optimize.py:205-245` renders and OCRs every page
+into a `TemporaryDirectory`, and only after the whole loop succeeds does it
+`original.save(destination)` — a single write at the end.
+`subprocess.TimeoutExpired` is caught *before* that save and returns `fail`. A
+server-side OCR timeout therefore writes nothing, and there is no partial file
+to orphan.
+
+**And it already bounds itself up front**, in the shape its siblings use
+(`extract`: *"Bounded; refuses when too big"*). `_edit_optimize.py:172-183`
+estimates `pages × ocr_seconds_per_page`, compares it to `max_ocr_seconds()`,
+and refuses with the page range that would fit.
+
+So what round 25 saw was a job the server **accepted, completed and wrote
+correctly**, while opencode's own request timeout fired because the box was at
+load average 12.95 on four cores — against ~4 seconds per page idle. The file
+was complete because the work was complete. The caller was misled by its own
+client, not by this tool.
+
+**No fix made, deliberately.** The remaining gap is a mismatch between
+`max_ocr_seconds()` and how long a particular client will wait, which is
+environmental and belongs in deployment tuning, not in the tool.
 
 ## Provider notes
 
