@@ -112,7 +112,7 @@ has "$R" 'link_clicks' && has "$R" 'leakage' && pass "train_regressor names link
 has "$R" 'component_of_target' && pass "with containment as the stated reason" || fail "no component_of_target evidence"
 has "$R" 'spends' && has "$R" 'alone_predicts_target' && fail "spends is falsely accused" || pass "spends and impressions are not accused"
 R=$(call "$ML/basic/mcp" "$MT" train_regressor '{"file_path":"/workspace/data/Ad_Data.csv","target_column":"clicks","model":"rfr","exclude_columns":["link_clicks"]}')
-has "$R" 'success' && ! has "$R" 'does not take' && pass "exclude_columns is a real parameter" || fail "exclude_columns not honoured"
+has "$R" 'r2' && ! has "$R" 'does not take' && pass "exclude_columns is a real parameter" || fail "exclude_columns not honoured"
 has "$R" 'Feature set narrowed' && pass "and the narrowing is confirmed in progress" || fail "narrowing not reported"
 R=$(call "$ML/basic/mcp" "$MT" train_regressor '{"file_path":"/workspace/data/Ad_Data.csv","target_column":"clicks","model":"rfr","feature_columns":["spends","nonexistent_col"]}')
 has "$R" 'nonexistent_col' && pass "an unknown feature column is refused by name" || fail "unknown feature column not caught"
@@ -130,7 +130,7 @@ echo
 echo "=== finding 8: no claim of an open that did not happen ==="
 R=$(call "$OFF/docx-new/mcp" "$OT" create_from_text \
   '{"output_path":"/workspace/data/v27_open.docx","paragraphs":[{"text":"round 27","style":"Normal"}]}')
-has "$R" 'success' && pass "the document is written" || fail "write failed"
+has "$R" 'output' && ! has "$R" 'does not take' && pass "the document is written" || fail "write failed"
 has "$R" 'default app' && fail "still claims a headless container opened it" || pass "no false open claim"
 
 echo
