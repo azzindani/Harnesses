@@ -40,6 +40,34 @@ pass() { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$1"; return 0; }
 fail() { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; printf '       %s\n' "${2:0:400}"; return 0; }
 has()  { grep -qF -- "$2" <<<"$1"; }
 
+# An assertion about what a REFUSAL says has to read only the refusal. Every
+# tool on this fleet echoes the arguments it was given, so grepping the whole
+# envelope for an argument name matches a success too: `pivot_table` returns the
+# string "agg_func" whether it refused the value or accepted it. Five assertions
+# below were written that way. Each was correct on the day it was written, and
+# each would have gone on passing if the behaviour regressed to silently
+# accepting and echoing -- which is the defect it exists to catch.
+msg() {
+  python3 -c '
+import json, sys
+for line in sys.stdin.read().splitlines():
+    line = line.strip()
+    if line.startswith("data:"):
+        line = line[5:].strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        body = json.loads(json.loads(line)["result"]["content"][0]["text"])
+    except Exception:
+        continue
+    print(" ".join(str(body.get(k, "")) for k in ("error", "hint")))
+    break
+' <<<"$1"
+}
+
+# Pair with msg() whenever the property is "refused, and the refusal said X".
+refused() { has "$1" '\"success\": false'; }
+
 # One session per endpoint, reused, like a real client.
 call() {
   local url="$1" tok="$2" tool="$3" args="$4" key sid hdr body resp
@@ -96,7 +124,7 @@ has "$R" 'was not applied' && pass "a dropped agg_func is reported, not swallowe
 echo
 echo "== 4: the hint names the argument that was wrong =="
 R=$(call "$DATA/medium/mcp" "$DT" pivot_table "{\"file_path\":\"$C\",\"index\":[\"campaign_platform\"],\"values\":[\"spends\"],\"agg_func\":\"definitely_not_a_func\"}")
-has "$R" 'agg_func' && pass "pivot_table names agg_func" || fail "still blaming something else" "$R"
+refused "$R" && has "$(msg "$R")" 'agg_func' && pass "pivot_table's refusal names agg_func" || fail "still blaming something else" "$R"
 has "$R" 'file_path and column names' && fail "still sends the caller to check file_path" "$R" || pass "and no longer blames file_path"
 R=$(call "$DATA/medium/mcp" "$DT" compute_aggregations "{\"file_path\":\"$C\",\"group_by\":[\"campaign_platform\"],\"agg_column\":\"spends\",\"agg_func\":\"average\"}")
 has "$R" '\"agg_func\": \"mean\"' && pass "average resolves to mean" || fail "alias not resolved" "$R"
@@ -134,9 +162,9 @@ R=$(call "$FS_URL" "$FT" list_fs_ops '{"op":"copy"}')
 has "$R" '\"src\"' && has "$R" '\"dst\"' && pass "list_fs_ops names copy's real fields" || fail "grammar still unreachable" "$R"
 has "$R" 'example' && pass "with a worked example" || fail "no example" "$R"
 R=$(call "$FS_URL" "$FT" fs_read "{\"path\":\"$W/does_not_exist.csv\"}")
-has "$R" "$W/does_not_exist.csv" && pass "fs_read reports the whole path it was given" || fail "still reports the basename" "$R"
+refused "$R" && has "$(msg "$R")" "$W/does_not_exist.csv" && pass "fs_read reports the whole path it was given" || fail "still reports the basename" "$R"
 R=$(call "$FS_URL" "$FT" fs_manage "{\"action\":\"disk_usage\",\"path\":\"$W/does_not_exist.csv\"}")
-has "$R" "$W/does_not_exist.csv" && pass "fs_manage disk_usage does too" || fail "disk_usage names no path" "$R"
+refused "$R" && has "$(msg "$R")" "$W/does_not_exist.csv" && pass "fs_manage disk_usage does too" || fail "disk_usage names no path" "$R"
 call "$FS_URL" "$FT" fs_archive "{\"action\":\"create\",\"path\":\"$W/v.zip\",\"target\":\"$W\"}" >/dev/null
 R=$(call "$FS_URL" "$FT" fs_archive "{\"action\":\"list\",\"path\":\"$W/v.zip\"}")
 has "$R" '\"success\": true' && pass "listing a .zip infers the format" || fail "list still demands a format" "$R"
@@ -149,7 +177,9 @@ for pair in "$MATH_URL|$MHT|calculate|{\"expression\":123}" \
             "$BROWSER_URL|$BT|browse_search|{\"query\":123}"; do
   IFS='|' read -r u t tool args <<<"$pair"
   R=$(call "$u" "$t" "$tool" "$args")
-  has "$R" 'success' && pass "$tool: a type error stays inside the contract" || fail "$tool: still a raw dump" "$R"
+  # 'success' alone matched a success:true too, so this passed whether the type
+  # error was refused inside the envelope or cheerfully accepted.
+  refused "$R" && pass "$tool: a type error stays inside the contract" || fail "$tool: still a raw dump" "$R"
   has "$R" 'pydantic.dev' && fail "$tool: still sends the caller to the internet" "$R" || pass "$tool: no external URL"
 done
 R=$(call "$BROWSER_URL" "$BT" browse_datetime '{}')
