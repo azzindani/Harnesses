@@ -798,3 +798,146 @@ the response it rejected.
          the extension of 'out.tar.gz'") and is better for that case
 
 Tool count 244 → 245: `list_fs_ops`.
+---
+
+# Round 29 — the enum
+
+Round 28 fixed the runtime side of the dispatch contract and deferred the
+schema, for a stated reason: several of these parameters accept documented
+aliases, so a `Literal` would narrow a contract callers already rely on. This
+round did the schema side, and the deferral turned out to be the right call for
+a sharper reason than the one given.
+
+## The mechanism, chosen by measurement
+
+Both candidates emit **the same JSON schema** on the bundled FastMCP:
+
+    Literal["a", "b"]
+    Annotated[str, Field(json_schema_extra={"enum": ["a", "b"]})]
+
+      -> {"default": "a", "enum": ["a", "b"], "title": "Mode", "type": "string"}
+
+So both deliver the entire client-facing benefit — a client reads `tools/list`,
+sees the legal values, and never sends a wrong one. They differ only in what
+happens to a value from outside the set:
+
+    with_literal   mode='alias_c'  -> RAISED ToolError: 1 validation error
+    with_extra     mode='alias_c'  -> {'success': True, 'mode': 'alias_c'}
+
+`Literal` makes pydantic answer before the tool body runs. That costs two things
+this fleet has spent twenty-eight rounds building:
+
+**The aliases.** `zscore` for `std`, `average` for `mean`, `MoM` for `M`, `==`
+for `equals`, `xlsx` for `excel`, `column` for `columns`. Each exists because a
+caller reached for it first, and being refused over a vocabulary difference is a
+wasted turn. A `Literal` of canonical names breaks every one; a `Literal` that
+lists the aliases too turns a three-value enum into a fourteen-value wall and
+stops being the readable answer it was added to be.
+
+**The refusals.** `train_regressor(model="lr")` currently answers:
+
+    error: "Unknown model: 'lr'. Allowed: dtr, lar, lir, pr, rfr, rr, xgb"
+    hint:  "'lr' is a train_classifier() model. Pick one listed above, or
+            call train_classifier()."
+
+That is the best error message in the fleet. `Literal` would replace it with
+pydantic's generic `literal_error`.
+
+So the enum **advertises** rather than enforces. The schema names the canonical
+values, the client validates against them and stops sending wrong ones, and
+anything that does arrive still reaches a tool that knows about aliases and can
+say something useful. `shared/schema_enum.py` carries that reasoning next to the
+two functions that implement it.
+
+## What was annotated
+
+**63 dispatch parameters across 6 repos** now name their values in the schema.
+Math has none. Every enum renders from the table the runtime switches on rather
+than a second copy — `ALLOWED_OPS` for `list_fs_ops`, `ALLOWED_CLASSIFIERS` /
+`ALLOWED_REGRESSORS` for the six model parameters, `AGG_FUNCS`,
+`OUTLIER_METHODS`, `ANOMALY_METHODS`, `CORRELATION_METHODS`, `NORMALIZE_MODES`
+from `shared/choice.py`. This repo has twice traced a chain of defects to a
+second table whose copies drifted; a test asserts the two agree.
+
+Three parameters correctly have **no** enum, and the exception list carries the
+reason for each rather than just the name:
+
+    office-docx-basic/append_text.style        a .docx defines its own styles.
+    office-docx-basic/insert_paragraph.style   The stock template has about a
+                                               hundred and a caller's template
+                                               can add any name. `resolve_style`
+                                               reads the real set at call time
+                                               and the refusal lists it.
+
+    data-visual/generate_geo_map.location_mode plotly's own vocabulary, passed
+                                               through unchanged and detected
+                                               from the data when omitted.
+
+## Four more of finding 4, found by the survey
+
+Building the value tables meant poisoning every dispatch parameter and reading
+what came back, and that turned up four tools round 28 had not reached — the
+same class as finding 4, in tools I had not thought to check:
+
+    cross_tabulate.agg_func       "'typo' is not a valid function for
+    reshape_dataset.agg_func       'DataFrameGroupBy' object" -- pandas'
+    generate_multi_chart.agg_func  complaint, under a hint naming the
+                                   arguments that were fine
+
+    aggregate_dataset.normalize   "Not a valid normalize argument" under
+                                  "Check mode and required parameters. Use
+                                  inspect_dataset() to verify column names"
+
+All four now validate against the same shared tables as their siblings. That is
+the argument for doing the schema work at all: **enumerating the legal values
+forces you to find out what they are**, and three of the four tools could not
+answer the question.
+
+## The tests
+
+A census test per repo, and it is the part worth keeping:
+
+* every parameter matching the dispatch names must declare an enum, or appear in
+  `NO_ENUM_IS_CORRECT` **with a reason** — so a new tool with a bare `mode: str`
+  fails loudly rather than joining the pile;
+* an exception that no longer exists is a stale excuse and fails too;
+* no enum may be empty or repeat itself;
+* a default must be one of its own declared values;
+* the declared set must equal the runtime table it renders from;
+* **every declared value must be one the tool actually takes** — the test that
+  matters most, because an advertised set can lie and this one must not.
+
+The census caught two real gaps while being written: the `test` alias spellings
+of `test_type` on both statistical-test tools had no enum, and three of my own
+exception entries named parameters that did not exist.
+
+## Verified on the deployed fleet
+
+The same script, run before and after the rebuild, is the whole result:
+
+    before:  69 dispatch parameters,  0 naming their values  -> FAILED
+    after:   69 dispatch parameters, 66 naming their values  -> ALL PASSED
+
+and the three without one print the reason rather than a blank:
+
+    data-visual/generate_geo_map.location_mode   plotly's set, auto-detected when omitted
+    office-docx-basic/append_text.style          the .docx defines its own styles;
+    office-docx-basic/insert_paragraph.style     resolve_style reads the real set
+
+Nothing regressed. Re-run against the rebuilt servers:
+
+    verify_r28_fixes.sh          47 / 47 assertions pass
+    unknown-argument sweep       245 / 245 tools still refuse a name they do not declare
+    dispatch-value probe         0 of the 5 silent acceptances have returned
+
+And the reason the enum advertises rather than enforces, checked through the
+deployed servers with the enum in place:
+
+    check_outliers        method="zscore"      -> success, used std
+    detect_anomalies      method="std"         -> success, used zscore
+    compute_aggregations  agg_func="average"   -> success, used mean
+    cross_tabulate        normalize="rows"     -> success, used index
+    period_comparison     period_unit="MoM"    -> success, used M
+    compare_models        models=["lir","rfr"] -> success, ranked both
+
+A `Literal` would have refused every one of those six before the tool body ran.
