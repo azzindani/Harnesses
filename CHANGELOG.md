@@ -7,7 +7,46 @@ and this project uses [Semantic Versioning](https://semver.org/) — while the
 major version is `0`, the public interface (env vars, compose service names,
 Caddy routes) may still change between minor releases.
 
-## [Unreleased]
+## [0.2.0] — 2026-09-07
+
+### Added
+
+- **`scripts/sweep/run_all_checks.sh`** — every checker in the directory against
+  the deployed fleet in one pass (~90s), quoting each one's own tally and
+  checking the `Ad_Data.csv` md5 either side. Exits non-zero if any fails.
+- **`scripts/sweep/unknown_arg_sweep.py`** — replaces the scratchpad
+  `direct_sweep.py`. Reads `tools/list` at the start of every run rather than
+  trusting a saved inventory, and checks the refusal against the argument names
+  the tool's own schema declares.
+- **`scripts/sweep/dispatch_probe.py`** — sends every dispatch parameter a value
+  it cannot mean and checks the refusal against the `enum` the deployed schema
+  publishes.
+
+### Fixed — checkers that were reporting their own condition as the fleet's
+
+- **The dispatch probe judged phrasing, not fact.** It decided whether a refusal
+  named its legal values by searching for words like "allowed" and "valid". That
+  filed `append_text`'s 27-style list as naming nothing, and passed any message
+  containing "Invalid" — because "Invalid" contains "valid". Two live defects sat
+  under that green line for two rounds.
+- **`verify_r28_fixes.sh` and `verify_r27_fixes.sh` grepped the whole envelope**
+  for a token that only means something inside a refusal. Every tool echoes the
+  arguments it was given, so `has "$R" 'agg_func'` matched a success too. Both
+  now read the refusal's own words and require a refusal to have happened.
+- **`verify_n1.sh` assumed fixtures a past round had made by hand.** They were
+  gone, so all 31 assertions answered "File not found" and the run read as 28
+  regressions. It builds its own now, owns them to the server's uid, and decodes
+  the result once in `call()` instead of asking 31 patterns to spell an escaped
+  quote.
+- **`verify_r24_shipped.sh` called `time_series_analysis` with `value_column`**,
+  since renamed to `value_columns`, so the argument guard refused the name
+  before `dayfirst` was ever read.
+- **`verify_vocab.sh`** — two patterns missing the escaped-quote allowance the
+  rest of the file already uses.
+
+---
+
+## [0.2.0] — 2026-09-07 · part two: the sweep harness
 
 ### Added
 

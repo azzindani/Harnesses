@@ -2,9 +2,9 @@
 
 [![CI](https://github.com/azzindani/Harnesses/actions/workflows/ci.yml/badge.svg)](https://github.com/azzindani/Harnesses/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Status: experimental](https://img.shields.io/badge/status-v0.1.1%20%E2%80%94%20experimental-orange.svg)](CHANGELOG.md)
+[![Status: experimental](https://img.shields.io/badge/status-v0.2.0%20%E2%80%94%20experimental-orange.svg)](CHANGELOG.md)
 
-> **Status:** `v0.1.1` — experimental / example project, actively evolving. Expect breaking changes between `0.x` releases; see [`CHANGELOG.md`](CHANGELOG.md).
+> **Status:** `v0.2.0` — experimental / example project, actively evolving. Expect breaking changes between `0.x` releases; see [`CHANGELOG.md`](CHANGELOG.md).
 >
 > There is nothing to install. Clone the repo, copy `.env.example` to `.env`, and `docker compose up -d` — every harness image is built locally from the Dockerfiles in `harnesses/`, so a release publishes no package and no container image.
 
