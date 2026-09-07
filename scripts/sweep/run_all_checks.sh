@@ -111,7 +111,17 @@ echo "logs: $OUT"
 # `r28d` is pruned from the inside as well, because that is where the residue
 # hid last time: its `.mcp_versions` and a set of unused samples survived two
 # cleanups by being one level down from anything anyone looked at.
-FIXTURES="Ad_Data.csv .gitkeep r28d"
+#
+# `uploads` is not a fixture and not sweep output: it is where files.<domain>
+# puts what a person uploads (data/ is writable in the browser, and this is the
+# one place in it that is meant to persist). It is protected, not pruned from
+# the inside, precisely because the cleanup cannot tell a wanted upload from
+# residue -- so nothing here is ever deleted automatically. That means it will
+# grow until someone empties it; `du -sh /root/Harnesses/data/uploads` is the
+# thing to check when the exchange looks bigger than the fixtures explain.
+# Anything dropped LOOSE in data/ is still cleared by the loop below, which is
+# the documented behaviour: data/uploads/ is the spot that survives a round.
+FIXTURES="Ad_Data.csv .gitkeep r28d uploads"
 R28D_KEEP="ads.csv book.xlsx filing.pdf out"
 R28D_OUT_KEEP="d3.docx p2.pptx reg_model.pkl"
 
