@@ -75,6 +75,35 @@ else
 fi
 echo "logs: $OUT"
 
+# Put the exchange back the way it was found.
+#
+# A full run writes about 100MB into /root/Harnesses/data -- trained models,
+# rendered charts, their sidecars, the per-checker fixture directories, and
+# `.mcp_versions`, the fleet's snapshot store, which every destructive write
+# appends to and nothing ever trims. That directory is served read-only at
+# files.<domain>, so the residue is not just disk: it is what a person sees
+# when they open the file browser, and after enough rounds the fixtures are
+# lost in it.
+#
+# Every checker here builds its own inputs -- verified by quarantining all 59
+# non-fixture entries and re-running: 15/15 still passed. So the only things
+# that must survive a run are the source fixtures listed below.
+#
+# `KEEP_OUTPUT=1 ./run_all_checks.sh` skips this, for when a failure needs the
+# artifacts inspected.
+FIXTURES="Ad_Data.csv Ad_Data.csv.mcp_receipt.json v27_rates.csv BBCA_filing.pdf v27_open.docx r28d .gitkeep"
+if [ "${KEEP_OUTPUT:-0}" = "1" ]; then
+  echo "output kept (KEEP_OUTPUT=1): $(du -sh /root/Harnesses/data | cut -f1)"
+else
+  removed=0
+  for entry in $(ls -A /root/Harnesses/data); do
+    case " $FIXTURES " in *" $entry "*) continue ;; esac
+    case "$entry" in report_*.md) continue ;; esac
+    rm -rf -- "/root/Harnesses/data/${entry:?}" && removed=$((removed + 1))
+  done
+  echo "exchange: $removed generated entr(ies) cleared, $(du -sh /root/Harnesses/data | cut -f1) of fixtures kept"
+fi
+
 if [ "$FAILED" -ne 0 ]; then
   echo
   echo "$FAILED checker(s) failed. Read the log before filing anything: three of"
