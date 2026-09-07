@@ -941,3 +941,119 @@ deployed servers with the enum in place:
     compare_models        models=["lir","rfr"] -> success, ranked both
 
 A `Literal` would have refused every one of those six before the tool body ran.
+
+---
+
+# Round 29b — the probe that scored its own phrasing
+
+The line above, "dispatch-value probe: 0 of the 5 silent acceptances have
+returned", was true. The line beside it, counting how many refusals named their
+legal values, was not measuring what it claimed.
+
+## What it was doing
+
+The probe decided that a refusal named its values if the message contained one
+of `one of`, `valid`, `accepts`, `allowed`, `use '`, `must be`. That is a sniff
+at phrasing, and it was wrong in both directions.
+
+**False alarm.** Four parameters were reported every round as naming nothing.
+All four named their values:
+
+    fs_archive.format_    "Pass format='zip' or format='tar.gz', or drop it
+                           and let the extension decide."
+    export_model.format   "Only 'pickle' is supported." / "Use format='pickle'."
+    append_text.style     "Styles here include: Normal, Body Text, Heading 1,
+    insert_paragraph.style Heading 2, ... (9 more in this document)."
+
+The last is 27 values and a count of the rest, from a set the schema cannot
+publish because each .docx defines its own. It is the best answer any of these
+tools give, and the probe filed it as the worst.
+
+**False pass, which is the one that matters.** The refusal test included
+`"nvalid" in blob` and the naming test included `"valid" in probe_free`. So a
+message reading only *"Invalid method"* -- naming nothing at all -- contained
+"Invalid", which contains "valid", and scored itself as listing its legal
+values. The same shape as round 28's `definitely_not_a_valid_value`, in the
+assertion rather than the probe token, surviving the round that fixed it.
+
+Two further errors were quieter:
+
+* Three cases sent calls that were invalid for another reason, so the refusal
+  was about a missing companion argument and the dispatch parameter was never
+  tested. They printed under "OTHER / inconclusive" and were read as coverage.
+* `fs_query.grep_mode` was probed with `True`, which is a legal value for a
+  boolean. The server was right to accept it; the probe called that a silent
+  defect for the whole of round 28.
+
+## What it does now
+
+Round 29 put the answer in the schema, so the probe reads `tools/list` and
+checks the refusal against the enum the server itself publishes. Fact, not
+phrasing. Matching is on whole tokens, so `iqr` can never match inside `iqrx`,
+and the probe's own value is removed by subtracting its tokens rather than
+deleting the string -- `period_unit` is D, H, M, Q, W, Y, so a textual strip
+would erase evidence and could split a longer word into something that looks
+like a legal value. A parameter the probe failed to test now fails the run.
+
+The startup assertion earned itself immediately: the first version refused to
+run, because it tested whether a legal value was a *substring* of the probe
+token, and `zzqq_no_such_choice` contains "q" and "h". With whole-token
+matching that was the wrong question, and the check now asks the right one --
+whether the probe token tokenises to a legal value.
+
+    59 dispatch parameters poisoned, on 14 endpoints
+      refusal names every legal value:  52
+      names part of the set:             5
+      names none of it:                  0
+      set is dynamic, candidates shown:  2
+      SILENTLY ACCEPTED:                 0
+      probe sent an incomplete call:     0
+
+Three of the five partials are correct and say so: `task="regression"` narrows
+thirteen models to seven, and listing all thirteen would offer values that call
+cannot use. The other two were defects.
+
+## Finding 25 — resample_timeseries advertised two aggregations it refuses
+
+    tools/list  agg_func: count first last max mean median min nunique std sum var
+    the tool    "Invalid agg_func: ['var']"   "Invalid agg_func: ['nunique']"
+
+Round 29's own doing. Every sibling takes the eleven in `AGG_FUNCS`; this tool
+validates against `_med_transform._VALID_AGGS`, which is nine, and was annotated
+with the eleven anyway. The docstring said nine, the refusal hint said nine, the
+runtime said nine, and only the schema said eleven.
+
+Round 29 shipped a test class called `TestEveryDeclaredValueIsAccepted` for
+exactly this, and `resample_timeseries` was not in it. The enum was the one
+thing a caller was told to trust, so this is worse than the prose it replaced.
+
+Narrowed, not widened: `ResampleAggFunc` renders from `_VALID_AGGS` itself.
+
+## Finding 26 — an unknown archive format reported as a contradicting one
+
+    fs_archive(action="create", path="z2.zip", format="zzqq_no_such_choice")
+      -> "format 'zzqq_no_such_choice' contradicts the extension of 'z2.zip'."
+         "That writes zzqq_no_such_choice bytes into a name meaning zip. Drop
+          `format` and let the extension decide, or rename the archive."
+
+It would not have written those bytes; there are no such bytes. Renaming the
+archive, one of the two ways out offered, would have changed nothing. The
+extension-conflict check ran ahead of the validity check, so a value that is not
+a format was described as a real format competing with the file's name -- and
+the refusal that does name `zip` and `tar.gz` was never reached.
+
+The repo's existing unknown-format test passed the whole time. It used a path
+called `out`, with no extension, which is the one shape where nothing is
+inferred and the branch cannot fire.
+
+## Verified
+
+    dispatch_probe.py            59/59, 0 untested, 0 silently accepted
+    verify_r28_fixes.sh          47 / 47
+    verify_r29_enums.sh          66 naming their values, 3 explained
+    unknown-argument sweep       245 / 245 REFUSED
+    MCP_Data_Analyst             2,979 tests   MCP_File_System   741 tests
+
+A probe is a claim about the fleet, and this one had been making a claim it
+could not support for two rounds. Both defects it found on its first honest run
+had been sitting under a green line.
