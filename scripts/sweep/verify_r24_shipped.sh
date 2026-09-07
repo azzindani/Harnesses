@@ -30,10 +30,10 @@ AD=/workspace/data/Ad_Data.csv
 D=/workspace/data/ship_r24
 
 echo "1. dayfirst refuses what it does not document (Data_Analyst)"
-R=$(rpc "$DATA/statistics/mcp" "$DT" time_series_analysis "{\"file_path\":\"$AD\",\"date_column\":\"Date\",\"value_column\":\"spends\",\"dayfirst\":\"yes\",\"open_after\":false}")
+R=$(rpc "$DATA/statistics/mcp" "$DT" time_series_analysis "{\"file_path\":\"$AD\",\"date_column\":\"Date\",\"value_columns\":[\"spends\"],\"dayfirst\":\"yes\",\"open_after\":false}")
 grep -q 'not a value this tool takes' <<<"$R" && pass "dayfirst='yes' refused" || fail "dayfirst='yes' still accepted"
 grep -qE 'auto.*false.*true|auto, false, true' <<<"$R" && pass "and the refusal names the three" || fail "refusal does not name them"
-R=$(rpc "$DATA/statistics/mcp" "$DT" time_series_analysis "{\"file_path\":\"$AD\",\"date_column\":\"Date\",\"value_column\":\"spends\",\"dayfirst\":\"auto\",\"open_after\":false}")
+R=$(rpc "$DATA/statistics/mcp" "$DT" time_series_analysis "{\"file_path\":\"$AD\",\"date_column\":\"Date\",\"value_columns\":[\"spends\"],\"dayfirst\":\"auto\",\"open_after\":false}")
 grep -q '2019-10-16' <<<"$R" && pass "auto still parses ISO correctly" || fail "auto broke"
 
 echo; echo "2. statistical_test says how many tests there are (Data_Analyst)"

@@ -15,7 +15,45 @@ ML_BASE=$(get ML_MCP_BASE_URL);     ML_TOK=$(get ML_MCP_TOKEN)
 OFF_BASE=$(get OFFICE_MCP_BASE_URL); OFF_TOK=$(get OFFICE_MCP_TOKEN)
 
 DIR=/workspace/data/n1_verify
+HOST_DIR=/root/Harnesses/data/n1_verify
 PASS=0; FAIL=0
+
+# The fixtures. This script used to assume they were already there, having been
+# made by hand during the round that wrote it. They are not there any more, so
+# every assertion failed with "File not found" and the run reported 28 defects
+# that did not exist. A checker that cannot make its own inputs is not runnable.
+# /root/Harnesses/data is the exchange the containers see as /workspace/data.
+setup_fixtures() {
+  mkdir -p "$HOST_DIR"
+  printf 'clicks,impressions,spends\n12,340,5.5\n' > "$HOST_DIR/one_row.csv"
+  # Placed here so the rest of the function can assume the writes land.
+  printf 'clicks,impressions,spends\n12,340,5.5\n9,220,4.0\n30,900,11.5\n7,150,3.25\n21,610,8.75\n' \
+    > "$HOST_DIR/five_rows.csv"
+  # `spend` entirely null and one column that is not, so exactly one is skipped.
+  printf 'name,spend\nA,\nB,\nC,\n' > "$HOST_DIR/all_null.csv"
+  printf 'name,spends\nA,7\nB,7\nC,7\n' > "$HOST_DIR/const_seed.csv"
+  python3 - "$HOST_DIR/formula.xlsx" <<'PY'
+import sys
+from openpyxl import Workbook
+
+wb = Workbook()
+ws = wb.active
+ws.title = "Data"
+for row, value in enumerate([4, 8, 15, 16], start=1):
+    ws.cell(row=row, column=2, value=value)
+# openpyxl stores the formula and never evaluates it, which is exactly the
+# state read_cell has to report rather than hand back as a value.
+ws["B5"] = "=SUM(B1:B4)"
+wb.save(sys.argv[1])
+PY
+  # Half these tools write their output back into this directory, and the
+  # servers run as uid 999 (app). A directory root has just made is not theirs
+  # to write, which surfaced as eleven "[Errno 13] Permission denied" failures
+  # that read like tool defects and were nothing of the kind.
+  chown -R 999:999 "$HOST_DIR" 2>/dev/null || chmod -R a+rwX "$HOST_DIR" 2>/dev/null || true
+  chmod 2775 "$HOST_DIR" 2>/dev/null || true
+}
+setup_fixtures
 
 # call <url> <token> <tool> <json-args>  -> prints the tool's result text
 call() {
@@ -36,7 +74,40 @@ call() {
     -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
     -H "mcp-session-id: $sid" \
     -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$tool\",\"arguments\":$args}}" \
-    | tr -d '\r' | grep '^data:' | sed 's/^data: //'
+    | tr -d '\r' | grep '^data:' | sed 's/^data: //' | decode
+}
+
+# The tool's result, decoded and compacted.
+#
+# Every pattern in this file is written against compact, unescaped JSON --
+# `"success":false`, `"rows_used":1`. What comes off the wire is the result as a
+# JSON *string*, so each quote is backslash-escaped, and the servers now
+# pretty-print, so each colon is followed by a space. Neither pattern can match
+# that, and grepping the raw envelope would have failed all 31 assertions on
+# formatting while reporting them as behaviour.
+#
+# Fixed once here rather than by rewriting 31 patterns: decode the string, then
+# collapse `": "` to `":"`. The alternative -- teaching every pattern to spell
+# `\\?"key\\?": ?value` -- is how verify_vocab ended up with two assertions that
+# silently stopped matching.
+decode() {
+  python3 -c '
+import json, sys
+for line in sys.stdin.read().splitlines():
+    line = line.strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        obj = json.loads(line)
+    except ValueError:
+        continue
+    try:
+        text = obj["result"]["content"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        text = json.dumps(obj)
+    print(json.dumps(json.loads(text), separators=(",", ":")) if text.lstrip().startswith("{") else text)
+    break
+' 2>/dev/null
 }
 
 # check <label> <url> <token> <tool> <args> <grep-pattern-that-must-appear>

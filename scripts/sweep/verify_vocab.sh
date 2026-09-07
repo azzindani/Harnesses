@@ -126,7 +126,7 @@ chmod -R a+rwX "$HOST" 2>/dev/null
 
 echo "=== data_analyst: the op catalog ==="
 check "list_patch_ops advertises 52" "$DATA_BASE/basic/mcp" "$DATA_TOK" list_patch_ops \
-  '{}' '"total_ops":52'
+  '{}' 'total_ops\\?": ?52'
 check "pipeline runs normalize" "$DATA_BASE/transform/mcp" "$DATA_TOK" run_cleaning_pipeline \
   "{\"file_path\":\"$DIR/rows.csv\",\"ops\":[{\"op\":\"normalize\",\"column\":\"spend\",\"method\":\"minmax\"}],\"output_path\":\"$DIR/norm.csv\"}" \
   'success\\?": ?true'
@@ -222,7 +222,7 @@ check "search_columns dtype=float64 filters" "$DATA_BASE/basic/mcp" "$DATA_TOK" 
   'matched\\?": ?2'
 check "search_columns dtype=str filters" "$DATA_BASE/basic/mcp" "$DATA_TOK" search_columns \
   "{\"file_path\":\"$DIR/rows.csv\",\"dtype\":\"str\"}" \
-  '"matched": ?1'
+  'matched\\?": ?1'
 check "search_columns refuses a bad dtype" "$DATA_BASE/basic/mcp" "$DATA_TOK" search_columns \
   "{\"file_path\":\"$DIR/rows.csv\",\"dtype\":\"complex128\"}" \
   'success\\?": ?false.*complex128'
