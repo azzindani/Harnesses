@@ -92,11 +92,17 @@ echo "logs: $OUT"
 # `KEEP_OUTPUT=1 ./run_all_checks.sh` skips this, for when a failure needs the
 # artifacts inspected.
 #
-# The list below is the whole of what a run needs. Nothing else in the exchange
-# is an input: the per-phase `report_*.md` files that used to sit here were
-# output from the container sweep, and FINDINGS_r28.md in this directory is the
-# record that survived.
-FIXTURES="Ad_Data.csv Ad_Data.csv.mcp_receipt.json v27_rates.csv BBCA_filing.pdf v27_open.docx r28d .gitkeep"
+# These eleven files are the whole of what a run needs -- every path any checker
+# in this directory names as an INPUT, and nothing else. Established by removing
+# everything else and re-running: 15/15 passed on eleven files.
+#
+# `r28d` is pruned from the inside as well, because that is where the residue
+# hid last time: its `.mcp_versions` and a set of unused samples survived two
+# cleanups by being one level down from anything anyone looked at.
+FIXTURES="Ad_Data.csv v27_rates.csv BBCA_filing.pdf v27_open.docx .gitkeep r28d"
+R28D_KEEP="ads.csv book.xlsx filing.pdf out"
+R28D_OUT_KEEP="d3.docx p2.pptx reg_model.pkl"
+
 if [ "${KEEP_OUTPUT:-0}" = "1" ]; then
   echo "output kept (KEEP_OUTPUT=1): $(du -sh /root/Harnesses/data | cut -f1)"
 else
@@ -105,7 +111,15 @@ else
     case " $FIXTURES " in *" $entry "*) continue ;; esac
     rm -rf -- "/root/Harnesses/data/${entry:?}" && removed=$((removed + 1))
   done
-  echo "exchange: $removed generated entr(ies) cleared, $(du -sh /root/Harnesses/data | cut -f1) of fixtures kept"
+  for entry in $(ls -A /root/Harnesses/data/r28d 2>/dev/null); do
+    case " $R28D_KEEP " in *" $entry "*) continue ;; esac
+    rm -rf -- "/root/Harnesses/data/r28d/${entry:?}" && removed=$((removed + 1))
+  done
+  for entry in $(ls -A /root/Harnesses/data/r28d/out 2>/dev/null); do
+    case " $R28D_OUT_KEEP " in *" $entry "*) continue ;; esac
+    rm -rf -- "/root/Harnesses/data/r28d/out/${entry:?}" && removed=$((removed + 1))
+  done
+  echo "exchange: $removed generated entr(ies) cleared, $(find /root/Harnesses/data -type f | wc -l) fixture file(s) / $(du -sh /root/Harnesses/data | cut -f1) kept"
 fi
 
 if [ "$FAILED" -ne 0 ]; then
