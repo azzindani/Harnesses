@@ -92,14 +92,26 @@ echo "logs: $OUT"
 # `KEEP_OUTPUT=1 ./run_all_checks.sh` skips this, for when a failure needs the
 # artifacts inspected.
 #
-# These eleven files are the whole of what a run needs -- every path any checker
-# in this directory names as an INPUT, and nothing else. Established by removing
-# everything else and re-running: 15/15 passed on eleven files.
+# v27_rates.csv and v27_open.docx were in this list until they were found to be
+# OUTPUT: verify_r27_fixes writes them during its run. Keeping them here meant
+# the cleanup preserved two generated files as though they were sources, and
+# they reappeared after every run that deleted them.
+#
+# Ad_Data.csv is the only SOURCE the checkers need. Established by emptying the
+# exchange and re-running: 14/15 passed on one file. Everything else that used
+# to live here was output -- v27_rates.csv and v27_open.docx are written by
+# verify_r27_fixes, and BBCA_filing.pdf was never read at all: the one assertion
+# naming it tests that an unknown ARGUMENT is refused, which happens before the
+# file is opened.
+#
+# `r28d` stays in the list, absent but protected: dispatch_probe is the one
+# checker that needs real .docx/.pptx/.xlsx/.pdf/model inputs, and if those are
+# restored the cleanup must not eat them.
 #
 # `r28d` is pruned from the inside as well, because that is where the residue
 # hid last time: its `.mcp_versions` and a set of unused samples survived two
 # cleanups by being one level down from anything anyone looked at.
-FIXTURES="Ad_Data.csv v27_rates.csv BBCA_filing.pdf v27_open.docx .gitkeep r28d"
+FIXTURES="Ad_Data.csv .gitkeep r28d"
 R28D_KEEP="ads.csv book.xlsx filing.pdf out"
 R28D_OUT_KEEP="d3.docx p2.pptx reg_model.pkl"
 
