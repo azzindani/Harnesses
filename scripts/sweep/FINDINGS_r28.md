@@ -554,3 +554,247 @@ Same family as findings 6 and 16.
 *"Drop `format` and let the extension decide"* — while `list` refuses to. The
 error also names no parameter, and the tool declares two of them (`format` and
 `format_`, both accepted), so the caller has to guess which the message means.
+
+## 23. `append_text` and `insert_paragraph` report a style they did not apply — MEDIUM
+
+Found by probing all 55 dispatch parameters with a value they cannot mean.
+
+    append_text(style="Heading 1")  -> success, style: "Heading 1"
+    append_text(style="Headng 1")   -> success, style: "Headng 1"
+
+    read_document:
+      index 1  "should be a heading"  style: "Heading 1"   <- applied
+      index 2  "typo style"           style: "Normal"      <- silently fell back
+
+An unknown style name falls back to Normal, and the response echoes the name the
+caller sent as though it had been used. One typo in a style name produces body
+text where a heading was asked for, reported as a success naming the heading.
+Every downstream consumer then agrees with the document and not the response:
+`get_document_outline` will not list it, `get_document_index` will not open a
+section for it.
+
+Same shape as finding 2 — the echo describes the request, not the result.
+
+## 24. `plot_learning_curve` accepts any `task` — MEDIUM
+
+    plot_learning_curve(target_column="spends", model="lir", task="typo")
+      -> success: true, scoring: "r2", final_val_score: 0.7829
+
+It fell through to the regression path. Its siblings all refuse:
+
+    train_with_cv(task="typo")         -> refused, legal set listed
+    tune_hyperparameters(task="typo")  -> refused, legal set listed
+    compare_models(task="typo")        -> refused, legal set listed
+
+`task` decides whether the curve is scored with r2 or accuracy. Asking for
+classification on a continuous target and silently getting an r2 curve back,
+labelled `scoring: "r2"`, is a plot that answers a different question than the
+one asked.
+
+---
+
+## Where the fleet already gets this right
+
+Of the 55 dispatch parameters probed with a value they cannot mean, **50
+refused** — including every one on filesystem, docs-edit, data-transform,
+data-visual and ml-basic:
+
+    fs_manage       "Use one of: disk_usage, permissions, symlink_info, versions."
+    reshape_dataset "Valid modes: combine_columns, melt, pivot, split_column, transpose"
+    generate_chart  "Valid types: bar, funnel, geo, line, parallel_coords, pie, ..."
+    train_regressor "Unknown model: 'lr'. Allowed: dtr, lar, lir, pr, rfr, rr, xgb"
+                    "'lr' is a train_classifier() model. Pick one listed above..."
+
+All but one of those 50 named the legal set or the specific conflict; the
+exception was `generate_chart`'s `agg_func`, which is finding 4.
+
+*(A correction to how that number was reached: the first pass used
+`definitely_not_a_valid_value` as the probe, and the test for "did the refusal
+list the legal values?" searched the response for words including **valid** —
+which the probe string itself contains, so every refusal that echoed the value
+scored as a pass. Re-run with the neutral token `zzqq_no_such_choice` and the
+probe value stripped before the search. The counts above are from the corrected
+run. The six silent acceptances were unaffected, and one of those six —
+`fs_query`'s `grep_mode` — turned out to be the probe's own error: `True` is a
+valid value for a boolean.)*
+
+So finding 5 is not "the fleet does not validate dispatch values" — it validates
+them well in 50 places and forgets in 5. The enum belongs in the schema so that
+remembering is not required.
+
+---
+
+# The fixes
+
+All 24 findings addressed, one deliberately declined. Every repo green on its
+own full gate — `ruff check`, `ruff format --check`, `pyright`, `pytest`,
+and the 80-char tool-docstring cap — and 82 tests added:
+
+| repo | suite | was |
+|---|---|---|
+| MCP_Data_Analyst | 2,952 | 2,934 |
+| MCP_Microsoft_Office | 2,197 | 2,181 |
+| MCP_Machine_Learning | 1,942 | 1,930 |
+| MCP_File_System | 723 | 712 |
+| MCP_Documents | 440 | 435 |
+| MCP_Web_Browser | 260 | 248 |
+| MCP_Math | 239 | 231 |
+
+## What each fix was
+
+**1, 6 — `check_outliers`, and the two names for one statistic.**
+`shared/choice.py` is a new module in the line `arg_alias.py` (parameter names)
+and `value_alias.py` (filter operators) already established: one table per
+closed set of dispatch values, one refusal rendered from it, and sibling
+spellings resolved rather than punished. `check_outliers` now refuses a method
+it cannot read and names `iqr, std, both`; `zscore` resolves to `std` there and
+`std` resolves to `zscore` at `detect_anomalies`. Neither canonical name moved.
+
+**2, 3 — `cross_tabulate`.** `normalize_mode()` refuses what it cannot read and
+the response echoes the value *used*, not the value sent. When `values_column`
+is absent, `agg_func` cannot apply, so the response says so in `progress`
+instead of dropping it in silence.
+
+**4 — hints that named the wrong argument.** `pivot_table`,
+`generate_correlation_heatmap` and `generate_chart` now validate the parameter
+that was actually wrong, before pandas sees it. `compute_aggregations` and
+`pivot_table` share one `AGG_FUNCS` table, so the two siblings stop disagreeing
+about what a valid function is — and `average` resolves to `mean`.
+
+**5 — the enum.** The five runtime gaps are closed (findings 1, 2, 23, 24, and
+`cross_tabulate`'s `agg_func`). The schema-level `enum` is **not** done, and is
+the one substantial thing left: several of these parameters accept documented
+aliases (`period_unit` takes `D/W/M/Q/Y/H` *and* `MoM/QoQ/YoY`; `export_data`'s
+`format` takes `xlsx` for `excel`), so a `Literal` narrows a contract callers
+already rely on. That is a deliberate change of surface, not a bug fix, and it
+belongs in its own round with the alias sets enumerated first.
+
+**7 — `list_fs_ops`.** Filesystem now has the discovery half it was missing,
+rendered from `ALLOWED_OPS`/`_REQUIRED`/`_OPTIONAL`/`_FIELD_ALIASES` rather than
+restated, with a worked example per op and a test asserting every example is a
+call the validator accepts.
+
+**8 — `add_chart` docstrings** name `chart_type`, which is the parameter that
+exists.
+
+**9 — the regex.** `_DETAIL` in `arg_errors.py` could not cross a `]` inside
+`input_value`, so a rejected call that happened to contain a list fell through
+to the raw pydantic dump while one without a list parsed cleanly. That was the
+whole difference between `add_slide`'s clean refusal and `add_table`'s. Fixed
+in all four repos that ship the module.
+
+**10 — not-found errors** report the path they were given, not its basename.
+
+**11 — Shapiro-Wilk.** `shapiro_sample()` reports what was actually tested.
+`data-statistics/statistical_test` now caps at 5,000 like its two siblings, so
+the fleet gives one answer (p=3.61e-88) instead of two, and every caller that
+subsamples says so with `n_used`, `n_total` and a note naming scipy's reason.
+
+**12 — the four repos without `arg_errors.py`** have it, installed before
+`enforce_known_arguments` so the name guard still answers first.
+
+**13 — `browser`** emits `success` alongside `ok`. `ok` is unchanged.
+
+**14 — `math/integrate`'s docstring** says the bounds are quoted strings.
+
+**15 — `dry_run`** computes and returns `leakage_suspects` and `leakage_note` in
+both trainers, from the same data the dry run already had in hand.
+
+**16 — `drop_column`** accepts `column` and `columns` at all three tools that
+run the op, and a list drops all or none.
+
+**18 — `create_invoice`** returns `tax` and `total` beside `subtotal`, plus the
+`"Stored, not computed"` note its four sibling formula tools already carry.
+
+**19 — `diff_versions`** says what it compared: *"No changes detected: no text
+or structural changes (formatting and styling are not compared)."*
+
+**20 — `add_table`** returns `table_index` and `table_count`, and warns when the
+insert renumbers tables a caller may already be holding an index into.
+
+**21 — `set_cell_style`** takes `fill` and `fill_color` at both tools, resolved
+in the engine so a direct caller and an MCP caller cannot diverge.
+
+**22 — `fs_archive`** infers the format from the extension for every action, not
+just `create`. In passing: the server defaulted `format_=""` and the engine
+`"zip"`, so the engine default was dead for every MCP caller and live for every
+direct one — two behaviours behind one signature. Now aligned.
+
+**23 — `append_text` / `insert_paragraph`** check the style against the open
+document before the snapshot and before anything is written, and refuse with the
+document's real style names. Nothing is written on a refusal.
+
+**24 — `plot_learning_curve`** validates `task` with the same sentence its three
+siblings use.
+
+## The one declined
+
+**17 — `create_from_blocks` returning success when no block was written.**
+Implemented, then reverted. This repo states the opposite contract deliberately,
+in a test whose docstring reads *"The refusal has to carry the answer, or it
+costs the loop it saved"* and whose assertion is *"an unrecognised kind must be
+reported, not dropped"*. The response already carries `skipped`, `block_count: 0`
+and a warning naming every valid kind — the information a caller needs is all
+there, and refusing would hand back no file instead of a file plus a diagnosis.
+Round 28 rated this LOW and it does not survive contact with the repo's own
+reasoning. What was kept is the half that does: the warning now also points at
+`list_block_kinds` and says body text is `kind='text'` — which is what all three
+of the blocks round 28 sent actually meant.
+
+---
+
+# Verified on the deployed fleet
+
+All seven containers rebuilt from the pushed commits, all seven CI runs green
+(ubuntu-22.04 / macos-latest / windows-latest, plus the container E2E job).
+
+`./verify_r28_fixes.sh` — **47 assertions, all passing**, by direct MCP call
+against the running servers. Each one picks inputs that hit the branch the fix
+*added*, which is the standing lesson of four previous rounds: a checker left to
+choose its own inputs picks the branch that did not change and reports green.
+
+    check_outliers  refuses an unknown method, names iqr/std/both, offers no
+                    verdict alongside the refusal; zscore resolves to std and
+                    the 3-sigma scan runs; std resolves to zscore the other way
+    cross_tabulate  refuses an unreadable normalize; echoes "index" for "rows";
+                    reports a dropped agg_func instead of swallowing it
+    pivot_table     names agg_func, no longer blames file_path; "average" ->
+                    "mean"; median accepted at both siblings
+    Shapiro         both endpoints now answer 3.61e-88 (was 3.61e-88 against
+                    3.81e-121), and the subsample is disclosed
+    dry_run         returns leakage_suspects naming link_clicks with
+                    component_of_target, while still saying would_train
+    list_fs_ops     names copy's src/dst with a worked example
+    fs_read/manage  report the whole path they were given
+    fs_archive      lists a .zip without being told the format
+    4 endpoints     a wrong-typed argument stays inside the contract, no
+                    pydantic.dev URL; browser carries both success and ok
+    append_text     refuses an unknown style and suggests the real name
+    add_table       returns table_index and warns when it renumbers
+    create_invoice  reports tax and total and says the cells are formulas
+    diff_versions   says what it did not compare
+    Ad_Data.csv     md5 9a16b9248526466960194df4eb7a3e90, unchanged
+
+**The first run of that script scored 44/47** and reported three passing
+behaviours as broken — `integrate`, the Shapiro comparison and `diff_versions`.
+All three were the same bug in the *checker*: a tool result arrives as the JSON
+string `result.content[0].text`, so every quote on the wire is
+backslash-escaped, and half the assertions matched `"` instead of `\"`. The
+identical mistake had just been made in the File_System smoke test and caught by
+CI. Fixed, stated at the top of the script, and worth repeating: **a checker
+that scores itself wrong is indistinguishable from a regression** until you read
+the response it rejected.
+
+## Fleet-wide re-probes
+
+    245 tools on 26 endpoints, an argument name none of them declares
+      -> REFUSED 245/245     (r27's guard intact, including the new tool)
+
+    56 dispatch parameters, a value they cannot mean
+      -> silently accepted: 0 of the 5 that were   (fs_query's grep_mode still
+         appears, and is the probe's own error: True is valid for a boolean)
+      -> refused: 55, all naming the legal set except fs_archive's format_,
+         which names the specific conflict instead ("format 'zip' contradicts
+         the extension of 'out.tar.gz'") and is better for that case
+
+Tool count 244 → 245: `list_fs_ops`.
