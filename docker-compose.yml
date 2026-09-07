@@ -202,7 +202,8 @@ services:
         condition: service_healthy
     command: ["/bin/sh", "-c", "/scripts/wait-for-it.sh plandex-postgres:5432 -- ./plandex-server"]
 
-  # Web-based file manager for project/, data/, and history/ — reuses the
+  # Web-based file manager for project/, data/, and history/ (writable in
+  # data/ and project/uploads, read-only elsewhere — see below) — reuses the
   # exact same subdomain + JWT/cookie auth as every CLI harness below (see
   # UTILITY_SERVICES in auth/server.py: /verify treats "files" as a normal
   # single-instance harness type, just like "claude" or "aider"). Unlike
@@ -217,31 +218,55 @@ services:
     image: sigoden/dufs:latest
     container_name: harness-files
     restart: unless-stopped
-    # Read-only, with --allow-search as the only extra. This was --allow-all,
-    # which is not "serve everything" -- it grants upload, delete, archive AND
-    # symlink-follow. Measured over the container's whole log before changing
-    # it: 546 GETs, and the only five non-GET requests ever were two write
-    # TESTS (2026-08-11, 2026-08-31). Nothing in the fleet uploads over HTTP
-    # either -- shared/exchange.py's attach_public_url only builds a download
-    # URL string, and every MCP server writes through its own rw bind mount as
-    # uid 999. So the write surface was never used, and it cost this: any
-    # harness session cookie could PUT and DELETE into ./project, which is
+    # Writable: all of /srv/data, plus the /srv/project/uploads drop box.
+    # Read-only: the rest of project/, and all of history/.
+    #
+    # This was --allow-all, which is not "serve everything" -- it grants
+    # upload, delete, archive AND symlink-follow, over all three trees. That
+    # let any harness session cookie PUT and DELETE into ./project, which is
     # /workspace in every harness container and holds the AGENTS.md and
-    # CLAUDE.md the agents read as instructions. That is instruction injection,
-    # not just file exposure.
+    # CLAUDE.md the agents read as instructions: instruction injection, not
+    # just file exposure. It went to --allow-search only, which fixed that and
+    # also removed the ability to upload anything at all.
+    #
+    # What is writable now is scoped rather than global, so that fix still
+    # holds: project/AGENTS.md and project/CLAUDE.md cannot be overwritten
+    # through the browser, and neither can any harness's conversation history.
+    #   1. --auth=@/data:rw,/project/uploads:rw,/  -- a single anonymous rule
+    #      (dufs rejects duplicate anonymous rules; the commas list further
+    #      scopes): rw on data/ and on the drop box, ro on everything else.
+    #      dufs reports this per-path, so its UI only offers the upload button
+    #      where writes are allowed, and a write elsewhere is 401 rather than
+    #      a broken button.
+    #   2. project/ and history/ stay :ro mounts. Even if a future edit passes
+    #      --allow-all, a write there hits EROFS in the kernel.
+    # --allow-symlink stays off: that was the escape out of the served root.
+    #
+    # data/ is ALSO the sweep's exchange, and scripts/sweep/run_all_checks.sh
+    # clears everything at its top level that is not in FIXTURES. So `uploads`
+    # is in that allowlist: files dropped in data/uploads/ survive a round,
+    # files dropped loose in data/ do not.
     command:
       - --bind=0.0.0.0
       - --port=7681
       - --allow-search
+      - --allow-upload
+      - --allow-delete
+      - --auth=@/data:rw,/project/uploads:rw,/
       - /srv
-    # :ro so a future flag or a dufs bug cannot write either. dufs still runs
-    # as root here on purpose: user: "999:999" is the tighter setting, but
-    # history/droid and project/.crush are 0700 root-owned, so it would make
-    # them 403 in the browser rather than merely unwritable.
+    # dufs still runs as root here on purpose: user: "999:999" is the tighter
+    # setting, but history/droid and project/.crush are 0700 root-owned, so it
+    # would make them 403 in the browser rather than merely unwritable. Uploads
+    # therefore land root-owned, which every harness (also root) can read. The
+    # fleet's MCP servers write into this same tree as uid 999 and only ever
+    # read what is already there, so root-owned 0644 uploads are fine for them.
     volumes:
       - ./project:/srv/project:ro
-      - ./data:/srv/data:ro
+      - ./data:/srv/data
       - ./history:/srv/history:ro
+      # Nested rw mount over the :ro one above. Docker orders mounts by
+      # destination depth, so this lands after /srv/project and wins.
+      - ./project/uploads:/srv/project/uploads
     networks:
       - harnesses_net
 

@@ -390,10 +390,18 @@ def main() -> int:
     if args.shots:
         args.shots.mkdir(parents=True, exist_ok=True)
 
+    # `uploads` joins `.mcp_versions` as a path part this never walks. Both are
+    # in the exchange without being artifacts of a round: that one is the
+    # snapshot store, this one is what a person uploaded through
+    # files.<domain>. Grading someone's own CSV as a checker's output would
+    # report failures against files no checker wrote.
     files = [
         p
         for p in sorted(args.dir.rglob("*"))
-        if p.is_file() and p.name not in skip and ".mcp_versions" not in p.parts
+        if p.is_file()
+        and p.name not in skip
+        and ".mcp_versions" not in p.parts
+        and "uploads" not in p.parts
     ]
     if not files:
         print(f"no files under {args.dir}", file=sys.stderr)
