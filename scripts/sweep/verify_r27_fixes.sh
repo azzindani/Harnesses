@@ -50,6 +50,28 @@ listing() {
 # it is backslash-escaped. Grep bare tokens, never `"success": false`.
 has() { grep -q "$2" <<<"$1"; }
 
+# The refusal's own words. Grepping the whole envelope for a value the probe
+# itself sent cannot tell "refused by name" from "accepted and echoed back":
+# train_regressor returns every feature column it was handed either way.
+msg() {
+  python3 -c '
+import json, sys
+for line in sys.stdin.read().splitlines():
+    line = line.strip()
+    if line.startswith("data:"):
+        line = line[5:].strip()
+    if not line.startswith("{"):
+        continue
+    try:
+        body = json.loads(json.loads(line)["result"]["content"][0]["text"])
+    except Exception:
+        continue
+    print(" ".join(str(body.get(k, "")) for k in ("error", "hint")))
+    break
+' <<<"$1"
+}
+refused() { has "$1" '\\"success\\": false'; }
+
 echo "=== finding 1: an argument no tool declares is refused, on all seven repos ==="
 declare -a PROBES=(
   "data-basic|$DATA/basic/mcp|$DT|inspect_dataset|{\"file_path\":\"/workspace/data/Ad_Data.csv\",\"zzz\":1}"
@@ -115,7 +137,7 @@ R=$(call "$ML/basic/mcp" "$MT" train_regressor '{"file_path":"/workspace/data/Ad
 has "$R" 'r2' && ! has "$R" 'does not take' && pass "exclude_columns is a real parameter" || fail "exclude_columns not honoured"
 has "$R" 'Feature set narrowed' && pass "and the narrowing is confirmed in progress" || fail "narrowing not reported"
 R=$(call "$ML/basic/mcp" "$MT" train_regressor '{"file_path":"/workspace/data/Ad_Data.csv","target_column":"clicks","model":"rfr","feature_columns":["spends","nonexistent_col"]}')
-has "$R" 'nonexistent_col' && pass "an unknown feature column is refused by name" || fail "unknown feature column not caught"
+refused "$R" && has "$(msg "$R")" 'nonexistent_col' && pass "an unknown feature column is refused by name" || fail "unknown feature column not caught"
 
 echo
 echo "=== finding 2: the derive grammar arrives whole ==="
