@@ -122,7 +122,7 @@ The token in the URL is your *credential*; the cookie the browser keeps is a sep
 
 - **One login, every subdomain.** The session is minted with a wildcard claim (`SESSION_SCOPE=all`, the default), so a single login unlocks all 11 harnesses, every `<harness>-<slug>` session, and `files.<domain>` — no second login, no per-subdomain token. Set `SESSION_SCOPE=harness` to keep the older behaviour where a token only opens its own harness.
 - **It slides.** Every request re-checks the cookie's remaining life; once less than `SESSION_REFRESH_DAYS` (30) of its `SESSION_TTL_DAYS` (360) window remain, the auth service mints a replacement and Caddy sets it on the response. A session you actually use therefore never expires. (A cookie predating this model — a raw `TOKEN_*` or the master secret — is upgraded to a session token on its next request, so no re-login is needed after upgrading.)
-- **Three ways to present a credential**, whichever validates first wins: `Authorization: Bearer <jwt>`, `?token=<jwt>`, or the `harness_session` cookie. The Bearer form is what lets a script or a mounted client talk to `files.<domain>` without a browser.
+- **Three ways to present a credential**, whichever validates first wins: `Authorization: Bearer <jwt>`, `?token=<jwt>`, or the `harness_session` cookie. The Bearer form is what lets a script or a mounted client talk to a harness without a browser — with one exception: on `files.<domain>`, `dufs` reads the `Authorization` header as its own credential and rejects it, so scripts there use `?token=` once and then the cookie (see [File management](#file-management)).
 - **The long-lived `TOKEN_*` values never live in the browser.** They (and the master `JWT_SECRET`) are only ever presented once, at login.
 
 If a session *does* get rejected, the auth service says so explicitly — `docker compose logs auth | grep "auth:"` prints one line per rejection with the host and reason, so "did it log me out, or did something else break?" is answerable rather than guesswork.
@@ -146,6 +146,17 @@ Visiting `https://<harness>-<slug>.lab.example.com/?token=<jwt>` (any existing t
 ## File management
 
 `https://files.lab.example.com/?token=<TOKEN_FILES>` gives you a web-based file browser over `project/`, `data/`, and `history/` — browse, download, search — using the *exact same* subdomain + JWT/cookie auth as every CLI harness above, not a separate login. It's backed by [dufs](https://github.com/sigoden/dufs), a small always-on service rather than an on-demand one: it's lightweight and has no per-visitor terminal state worth idle-stopping, so (unlike the CLI harnesses) it doesn't sleep and there's no cold-start delay.
+
+**Any folder downloads as a single zip.** Every directory row has a download button that pulls the whole subtree, built on the fly and streamed — nothing is staged on disk first, so the download starts immediately and a big tree costs time, not space. The same thing by URL is `?zip` on any directory: `https://files.lab.example.com/history/claude?zip`, `.../project/uploads?zip`, or `https://files.lab.example.com/?zip` for all three trees at once. It's a plain authenticated `GET`, so it scripts from any machine — a one-liner backup of a single harness's history without shelling into the box:
+
+```bash
+curl -sL -c jar 'https://files.lab.example.com/?token=<TOKEN_FILES>' -o /dev/null   # login once, keep the cookie
+curl -sL -b jar 'https://files.lab.example.com/history/claude?zip' -o claude.zip
+```
+
+Use the `?token=`/cookie form here, **not** `Authorization: Bearer`, even though every other subdomain accepts Bearer. Caddy passes the header through and `dufs` — which has its own `--auth` rule, for the read-only/read-write scoping below — tries to read it as *its* credential, fails to parse a JWT as Digest, and answers `401 WWW-Authenticate: Digest realm="DUFS"`. That rejection is `dufs`'s, after this lab's auth already said yes.
+
+One thing dufs does *not* have is Google-Drive-style multi-select: there are no per-file checkboxes, so "zip these four files" isn't a gesture the UI offers. Zip the folder that contains them, or fetch the files individually. The zip is read-only and can't escape `/srv` (`--allow-symlink` is off), so it exposes nothing that browsing file by file didn't.
 
 **You can upload into `data/` (anywhere in it) and into `project/uploads`.** Those are the two writable scopes — the upload button appears there, and `PUT`/`DELETE` are accepted there. The rest of `project/` and all of `history/` stay read-only: they answer `401`, and their bind mounts are `:ro` underneath, so even a widened flag can't write them. That scoping is deliberate — unrestricted upload meant anything holding a session cookie could overwrite `project/AGENTS.md` and `project/CLAUDE.md`, which every agent reads as instructions.
 

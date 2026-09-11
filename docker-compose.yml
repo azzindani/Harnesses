@@ -242,6 +242,14 @@ services:
     #      --allow-all, a write there hits EROFS in the kernel.
     # --allow-symlink stays off: that was the escape out of the served root.
     #
+    # --allow-archive is the one piece of --allow-all that came back: it adds
+    # `GET <dir>?zip`, a streamed zip of a whole folder, and the UI's per-folder
+    # download button. It is read-only -- it reads what the browser could
+    # already fetch file by file, and with --allow-symlink off it cannot walk
+    # out of /srv -- so it does not reopen the write hole above. Note it ignores
+    # the --auth rule's scoping in one direction only: everything here is
+    # readable anyway, so zipping exposes nothing a per-file GET didn't.
+    #
     # data/ is ALSO the sweep's exchange, and scripts/sweep/run_all_checks.sh
     # clears everything at its top level that is not in FIXTURES. So `uploads`
     # is in that allowlist: files dropped in data/uploads/ survive a round,
@@ -252,6 +260,10 @@ services:
       - --allow-search
       - --allow-upload
       - --allow-delete
+      - --allow-archive
+      # Zips are built on the fly and streamed, so this trades CPU for latency
+      # on the way out; "low" keeps a big history/ folder from pegging a core.
+      - --compress=low
       - --auth=@/data:rw,/project/uploads:rw,/
       - /srv
     # dufs still runs as root here on purpose: user: "999:999" is the tighter
