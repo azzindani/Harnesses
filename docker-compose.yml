@@ -133,6 +133,9 @@ services:
       # its tmux server and every session in it (see .env.example).
       IDLE_EXEMPT: ${IDLE_EXEMPT:-}
       RETENTION_DAYS: ${RETENTION_DAYS:-7}
+      # Hours one <harness>-<slug> session may have no tab open before just
+      # that session is closed, freeing its CLI's RAM (see .env.example).
+      SESSION_IDLE_HOURS: ${SESSION_IDLE_HOURS:-24}
       MAX_INSTANCES_PER_HARNESS: ${MAX_INSTANCES_PER_HARNESS:-5}
       HARNESS_BASE_DOMAIN: ${HARNESS_BASE_DOMAIN:-lab.example.com}
       # Browser session: minted at login, slid on use, one login for every

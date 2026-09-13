@@ -140,7 +140,8 @@ Visiting `https://<harness>-<slug>.lab.example.com/?token=<jwt>` (any existing t
 
 - Up to `MAX_INSTANCES_PER_HARNESS` (default `5`) concurrent extra sessions per harness type, on ports `7682`–`7686`.
 - Each slug's session and port are stable across reconnects; visiting the same slug again reattaches to the same tmux window.
-- `/pin` and `/unpin` (e.g. `https://claude-blog.lab.example.com/pin`) exempt a session from the `RETENTION_DAYS` auto-cleanup sweep.
+- A session nobody has had a tab open on for `SESSION_IDLE_HOURS` (default `24`) is closed on its own — its CLI process and its `ttyd` — while `main` and every other session keep running, even on an `IDLE_EXEMPT` harness. Each slug is a whole CLI (~1GB for opencode), and idle-stop (below) can't reclaim one while anything else in the container is in use. Visiting the URL again starts it fresh; the conversation is still in `history/`.
+- `/pin` and `/unpin` (e.g. `https://claude-blog.lab.example.com/pin`) exempt a session from that and from the `RETENTION_DAYS` auto-cleanup sweep.
 - Because every session of one harness type shares that one container, idle-stop is all-or-nothing: the container only stops once *every* session on it (base and every slug) has had no connected client for `IDLE_TIMEOUT_MIN`. A dynamic session's tmux window doesn't survive a container stop — it's recreated fresh the next time that slug is visited (the CLI's own conversation history, where a harness persists one, is unaffected — only the terminal window itself is momentarily gone).
 
 ## File management
@@ -203,6 +204,7 @@ See `.env.example` for the full, commented list. Highlights beyond the provider 
 | `IDLE_EXEMPT` | harness types the idle sweep never stops, e.g. `claude,opencode` — empty by default, since waking now resumes the conversation anyway |
 | `COLD_START_TIMEOUT_S` | seconds `/verify` waits for a cold-starting harness before returning 504 (claude needs >60s to register its MCP servers) |
 | `RETENTION_DAYS` | days of inactivity before an unpinned dynamic session is torn down |
+| `SESSION_IDLE_HOURS` | hours a dynamic session can go with no tab connected before just that session is closed, freeing its CLI's RAM — `IDLE_EXEMPT` harnesses included (`0` disables) |
 | `MAX_INSTANCES_PER_HARNESS` | cap on concurrent dynamic sessions per harness type (`0` = unlimited) |
 | `TOKEN_<NAME>` | per-harness JWT (auto-filled by the auth service if left blank) |
 | `FREE_FALLBACK` / `FREE_REQUIRE_TOOLS` | OpenRouter free-model catalog/fallback behavior |
