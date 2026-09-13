@@ -81,7 +81,7 @@ project/, data/, history/  # gitignored (except .gitkeep) — real working data,
 
 ## Environment variables
 
-Full documented list lives in `.env.example` — don't let it drift from what `docker-compose.yml` actually reads. Highlights: `HARNESS_BASE_DOMAIN`, `JWT_SECRET`, `SESSION_TTL_DAYS` / `SESSION_REFRESH_DAYS` / `SESSION_SCOPE`, `IDLE_TIMEOUT_MIN`, `IDLE_EXEMPT`, `COLD_START_TIMEOUT_S`, `RETENTION_DAYS`, `MAX_INSTANCES_PER_HARNESS`, `TOKEN_<NAME>` (auto-filled by `auth` if blank), `FREE_FALLBACK` / `FREE_REQUIRE_TOOLS`, `FOLIO_MCP_URL` / `FOLIO_MCP_TOKEN`, `WEB_MCP_URL`, and the 6 self-hosted `MCP_*` tool servers: `MATH_MCP_URL`/`_TOKEN`, `BROWSER_MCP_URL`/`_TOKEN`, `FS_MCP_URL`/`_TOKEN`, `ML_MCP_BASE_URL`/`_TOKEN`, `DATA_MCP_BASE_URL`/`_TOKEN`, `OFFICE_MCP_BASE_URL`/`_TOKEN`.
+Full documented list lives in `.env.example` — don't let it drift from what `docker-compose.yml` actually reads. Highlights: `HARNESS_BASE_DOMAIN`, `JWT_SECRET`, `SESSION_TTL_DAYS` / `SESSION_REFRESH_DAYS` / `SESSION_SCOPE`, `IDLE_TIMEOUT_MIN`, `IDLE_EXEMPT`, `COLD_START_TIMEOUT_S`, `RETENTION_DAYS`, `SESSION_IDLE_HOURS` (closes one slug session with no tab for that long — even on an `IDLE_EXEMPT` harness), `MAX_INSTANCES_PER_HARNESS`, `TOKEN_<NAME>` (auto-filled by `auth` if blank), `FREE_FALLBACK` / `FREE_REQUIRE_TOOLS`, `FOLIO_MCP_URL` / `FOLIO_MCP_TOKEN`, `WEB_MCP_URL`, and the 6 self-hosted `MCP_*` tool servers: `MATH_MCP_URL`/`_TOKEN`, `BROWSER_MCP_URL`/`_TOKEN`, `FS_MCP_URL`/`_TOKEN`, `ML_MCP_BASE_URL`/`_TOKEN`, `DATA_MCP_BASE_URL`/`_TOKEN`, `OFFICE_MCP_BASE_URL`/`_TOKEN`.
 
 ## MCP server registration pattern
 

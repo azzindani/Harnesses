@@ -47,6 +47,7 @@ import logging
 import os
 import re
 import socket
+import threading
 import time
 
 import docker
@@ -60,6 +61,14 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
 IDLE_TIMEOUT_MIN = int(os.environ.get("IDLE_TIMEOUT_MIN", "30"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "7"))
+# Hours one dynamic <harness>-<slug> session may sit with no tab connected
+# before the idle sweep closes just that session (its CLI and its ttyd),
+# leaving the container, `main`, and every other slug running. Each slug is a
+# whole CLI process (~1GB for opencode) that the all-or-nothing container stop
+# can't reclaim while anything else on it is in use -- or ever, for an
+# IDLE_EXEMPT harness -- so this one ignores IDLE_EXEMPT. Pinned sessions are
+# kept. 0 disables.
+SESSION_IDLE_HOURS = int(os.environ.get("SESSION_IDLE_HOURS", "24"))
 # Cap on concurrent dynamic SESSIONS per harness type. All sessions of one
 # harness type share the single base harness-<type> container (see
 # project_harness_multi_instance memory for why: a separate container per
@@ -257,7 +266,10 @@ def _instances_load() -> None:
 def _instances_save() -> None:
     try:
         os.makedirs(os.path.dirname(INSTANCES_FILE), exist_ok=True)
-        tmp = INSTANCES_FILE + ".tmp"
+        # Per-thread tmp name: /verify (FastAPI's threadpool) and the sweeps
+        # save concurrently, and with one shared name the first os.replace
+        # took the file out from under the second ("could not save ...").
+        tmp = f"{INSTANCES_FILE}.{threading.get_ident()}.tmp"
         with open(tmp, "w") as f:
             json.dump(instances, f, indent=2)
         os.replace(tmp, INSTANCES_FILE)
@@ -665,38 +677,88 @@ def _harness_type_of(name: str) -> str | None:
     return head if head in HARNESSES else None
 
 
-def _terminal_busy_any(container, ports: list[int]) -> bool:
-    """True when a client holds an ESTABLISHED TCP connection to ANY of the
-    given ports on this container -- the base ttyd (HARNESS_PORT) plus every
-    currently-assigned dynamic-session port, since idle-stopping the shared
-    container has to wait for every session on it to go quiet, not just the
-    base one.
+def _busy_ports(container, ports: list[int]) -> set[int] | None:
+    """Which of the given ports on this container a client holds an
+    ESTABLISHED TCP connection to -- the base ttyd (HARNESS_PORT) plus every
+    currently-assigned dynamic-session port.  The container as a whole is busy
+    when any of them is (idle-stopping the shared container has to wait for
+    every session on it to go quiet); each slug is idle on its own when its
+    port isn't.
 
     Caddy proxies the browser terminal's websocket straight to
     harness-<type>:<port>, and a websocket only triggers /verify once at
     connect — so a long-lived session looks 'idle' to a timestamp-only
     tracker and would be killed mid-use.  Reading /proc/net/tcp{,6} (always
     present in a Linux container, no extra tooling needed) is the reliable
-    'visitor present' signal. On any error we report not-busy and let the
-    /verify timestamp decide.
+    'visitor present' signal.  Returns None when the check itself failed, so
+    a caller can tell 'nobody connected' from 'couldn't tell'.
     """
-    hexports = {"%04X" % p for p in ports}
+    by_hex = {"%04X" % p: p for p in ports}
     try:
         res = container.exec_run(
             ["sh", "-c", "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null"])
         out = (res.output or b"").decode("latin-1", "replace")
     except Exception as e:
         log.debug("connection check failed for %s: %s", container.name, e)
-        return False
+        return None
+    if not out.strip():
+        return None  # not even the header line: the read didn't happen
+    busy: set[int] = set()
     for line in out.splitlines():
         parts = line.split()
         if len(parts) < 4:
             continue
         local, state = parts[1], parts[3]
         # state 01 = TCP_ESTABLISHED; `local` is HEXIP:HEXPORT.
-        if state == "01" and local.upper().split(":")[-1] in hexports:
-            return True
-    return False
+        port = by_hex.get(local.upper().split(":")[-1])
+        if state == "01" and port is not None:
+            busy.add(port)
+    return busy
+
+
+def _kill_session(container, instance: str, port: int | None) -> None:
+    """End one dynamic session inside its running base container: its tmux
+    session (which takes the CLI in it down) and the ttyd serving it."""
+    container.exec_run(["tmux", "kill-session", "-t", instance])
+    if port is not None:
+        # "--port N --writable", not "ttyd --port N": ttyd-wrapper.sh puts
+        # `--index <file>` between the two, so that pattern never matched and
+        # every closed session left its ttyd behind (see new-session.sh).
+        container.exec_run(["pkill", "-f", "--", f"--port {port} --writable"])
+
+
+def _close_idle_sessions(container, harness_type: str,
+                         slug_ports: dict[str, int], busy: set[int] | None) -> None:
+    """Refresh last_seen_ts for every dynamic session that has a tab
+    connected, and close the unpinned ones nobody has had open for
+    SESSION_IDLE_HOURS.  A closed slug's URL keeps working: the next visit
+    starts it fresh, like one the retention sweep closed."""
+    if busy is None or not slug_ports:
+        return  # couldn't read connections: never close a session on a guess
+    now = time.time()
+    changed = False
+    for slug, port in slug_ports.items():
+        key = _session_key(harness_type, slug)
+        meta = instances.get(key)
+        if meta is None:
+            continue
+        if port in busy:
+            meta["last_seen_ts"] = now
+            changed = True
+            continue
+        idle_s = now - meta.get("last_seen_ts", now)
+        if SESSION_IDLE_HOURS <= 0 or meta.get("pinned") or idle_s < SESSION_IDLE_HOURS * 3600:
+            continue
+        log.info("closing session %s after %.1fh with no connected tab", key, idle_s / 3600)
+        try:
+            _kill_session(container, slug, port)
+        except Exception as e:
+            log.warning("could not close session %s: %s", key, e)
+            continue
+        instances.pop(key, None)
+        changed = True
+    if changed:
+        _instances_save()
 
 
 async def _idle_sweep() -> None:
@@ -713,12 +775,19 @@ async def _idle_sweep() -> None:
     Dynamic sessions on a stopped container don't auto-resume (their tmux
     windows are gone), but _ensure_dynamic_session recreates them on the next
     /verify for that slug.
+
+    The same connection reading also drives _close_idle_sessions, which
+    closes a single dynamic session nobody has had open for
+    SESSION_IDLE_HOURS -- on IDLE_EXEMPT harnesses too.
     """
-    if IDLE_TIMEOUT_MIN <= 0:
-        log.info("idle sweep disabled (IDLE_TIMEOUT_MIN=0)")
+    if IDLE_TIMEOUT_MIN <= 0 and SESSION_IDLE_HOURS <= 0:
+        log.info("idle sweep disabled (IDLE_TIMEOUT_MIN=0, SESSION_IDLE_HOURS=0)")
         return
     if IDLE_EXEMPT:
         log.info("idle sweep: never stopping %s (IDLE_EXEMPT)", ", ".join(sorted(IDLE_EXEMPT)))
+    if SESSION_IDLE_HOURS > 0:
+        log.info("idle sweep: closing dynamic sessions after %dh with no tab connected",
+                 SESSION_IDLE_HOURS)
     timeout_s = IDLE_TIMEOUT_MIN * 60
     while True:
         await asyncio.sleep(60)
@@ -726,7 +795,9 @@ async def _idle_sweep() -> None:
         try:
             running = docker_client.containers.list(
                 filters={"name": CONTAINER_PREFIX, "status": "running"})
-        except docker.errors.APIError as e:
+        except Exception as e:
+            # Not just APIError: a slow daemon raises requests' ReadTimeout,
+            # which used to escape here and end the sweep task for good.
             log.warning("idle sweep: container list failed: %s", e)
             continue
         alive: set[str] = set()
@@ -736,19 +807,16 @@ async def _idle_sweep() -> None:
             if htype is None:
                 continue  # not a managed harness container
             alive.add(name)
-            if htype in IDLE_EXEMPT:
+            slug_ports = _assigned_ports(htype)
+            busy = _busy_ports(container, [HARNESS_PORT] + list(slug_ports.values()))
+            _close_idle_sessions(container, htype, slug_ports, busy)
+            if IDLE_TIMEOUT_MIN <= 0 or htype in IDLE_EXEMPT:
                 # Never idle-stop this one: stopping the container kills its
                 # tmux server, and with it every CLI session running in it.
                 last_seen[name] = now
                 continue
-            ports = [HARNESS_PORT] + list(_assigned_ports(htype).values())
-            if _terminal_busy_any(container, ports):
+            if busy:
                 last_seen[name] = now  # active visitor → keep alive
-                now_wall = time.time()
-                for slug in _assigned_ports(htype):
-                    key = _session_key(htype, slug)
-                    if key in instances:
-                        instances[key]["last_seen_ts"] = now_wall
                 continue
             ts = last_seen.get(name)
             if ts is None:
@@ -801,9 +869,7 @@ async def _retention_sweep() -> None:
             try:
                 container = docker_client.containers.get(container_name)
                 if container.status == "running":
-                    container.exec_run(["tmux", "kill-session", "-t", instance])
-                    if port is not None:
-                        container.exec_run(["pkill", "-f", f"ttyd --port {port} "])
+                    _kill_session(container, instance, port)
             except NotFound:
                 pass
             except Exception as e:
