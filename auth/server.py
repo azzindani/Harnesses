@@ -214,6 +214,9 @@ docker_client = docker.from_env()
 # whole; _idle_sweep only lets it go idle once EVERY session on it (base +
 # every dynamic slug) has been quiet for the timeout.
 last_seen: dict[str, float] = {}
+# Source IP → running harness container, rebuilt by every idle sweep, so a
+# model request through this proxy can count as that harness being in use.
+_harness_by_ip: dict[str, str] = {}
 
 # Per-session metadata persisted to /data/instances.json so retention survives
 # auth-service restarts. Only contains *dynamic* sessions (not the 11 base
@@ -677,6 +680,29 @@ def _harness_type_of(name: str) -> str | None:
     return head if head in HARNESSES else None
 
 
+def _harness_ips(containers) -> dict[str, str]:
+    """Every network address of the given harness containers, mapped to the
+    container's name."""
+    ips: dict[str, str] = {}
+    for container in containers:
+        if _harness_type_of(container.name) is None:
+            continue
+        networks = (container.attrs.get("NetworkSettings") or {}).get("Networks") or {}
+        for net in networks.values():
+            if net.get("IPAddress"):
+                ips[net["IPAddress"]] = container.name
+    return ips
+
+
+def _note_model_request(request: Request) -> None:
+    """A harness calling a model is in use even with no tab open. An agent
+    left working used to be idle-stopped mid-task, 30 minutes after a phone
+    dropped its terminal connection."""
+    name = _harness_by_ip.get(request.client.host if request.client else "")
+    if name:
+        last_seen[name] = time.monotonic()
+
+
 def _busy_ports(container, ports: list[int]) -> set[int] | None:
     """Which of the given ports on this container a client holds an
     ESTABLISHED TCP connection to -- the base ttyd (HARNESS_PORT) plus every
@@ -800,6 +826,8 @@ async def _idle_sweep() -> None:
             # which used to escape here and end the sweep task for good.
             log.warning("idle sweep: container list failed: %s", e)
             continue
+        _harness_by_ip.clear()
+        _harness_by_ip.update(_harness_ips(running))
         alive: set[str] = set()
         for container in running:
             name = container.name
@@ -1982,8 +2010,8 @@ _KEEPALIVE_S = 10.0
 # While a model thinks, Go streams reasoning summaries every few seconds (the
 # longest gap seen was 17s), so a stream with no bytes for this long has hung.
 # One did: 300s of silence, then the client's read timeout. Cutting it sooner
-# lets Claude Code retry sooner. A non-streaming request keeps the full 300s,
-# because it sends nothing until it is done.
+# gets the answer sooner (see _stream_or_fallback). A non-streaming request
+# keeps the full 300s, because it sends nothing until it is done.
 _GO_STREAM_READ_TIMEOUT_S = 120.0
 
 
@@ -2032,10 +2060,124 @@ async def _with_keepalive(chunks, interval: float = _KEEPALIVE_S):
             pass
 
 
+def _sse(event: str, data: dict) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+
+def _stream_error(message: str) -> bytes:
+    """An error event ending a stream, of the type Claude Code retries."""
+    return _sse("error", {"type": "error", "error": {"type": "overloaded_error", "message": message}})
+
+
+def _unstreamed(body: dict) -> dict:
+    return {k: v for k, v in body.items() if k not in ("stream", "stream_options")}
+
+
+def _message_events(message: dict, first_index: int, started: bool):
+    """A whole Anthropic message as the stream events that would have carried
+    it, its content blocks numbered from `first_index`.  `started` says the
+    stream already sent its message_start."""
+    if not started:
+        yield _sse("message_start", {"type": "message_start", "message": {
+            **message, "content": [], "stop_reason": None, "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0}}})
+    for index, block in enumerate(message.get("content") or [], first_index):
+        if block.get("type") == "tool_use":
+            start = {"type": "tool_use", "id": block.get("id"), "name": block.get("name"), "input": {}}
+            delta = {"type": "input_json_delta", "partial_json": json.dumps(block.get("input") or {})}
+        elif block.get("type") == "thinking":
+            start = {"type": "thinking", "thinking": "", "signature": ""}
+            delta = {"type": "thinking_delta", "thinking": block.get("thinking", "")}
+        else:
+            start = {"type": "text", "text": ""}
+            delta = {"type": "text_delta", "text": block.get("text", "")}
+        yield _sse("content_block_start", {"type": "content_block_start", "index": index, "content_block": start})
+        yield _sse("content_block_delta", {"type": "content_block_delta", "index": index, "delta": delta})
+        yield _sse("content_block_stop", {"type": "content_block_stop", "index": index})
+    yield _sse("message_delta", {
+        "type": "message_delta",
+        "delta": {"stop_reason": message.get("stop_reason"), "stop_sequence": None},
+        "usage": message.get("usage") or {},
+    })
+    yield _sse("message_stop", {"type": "message_stop"})
+
+
+async def _answer_without_streaming(upstream_request: httpx.Request, translate_response) -> dict:
+    """Send a request unstreamed and return the reply as an Anthropic message.
+    Raises on any failure."""
+    upstream = await _PROXY_CLIENT.send(upstream_request)
+    if upstream.status_code >= 400:
+        raise RuntimeError(f"upstream {upstream.status_code}: {upstream.text[:300]}")
+    data = upstream.json()
+    if isinstance(data, dict) and data.get("error") and not (data.get("choices") or data.get("output")):
+        raise RuntimeError(_upstream_error(data["error"])[2])
+    return translate_response(data)
+
+
+async def _stream_or_fallback(upstream: httpx.Response, translate_stream, translate_response,
+                              fallback_request=None):
+    """Relay a translated stream.  If the upstream hangs or drops before the
+    answer has begun (thinking at most), ask again without streaming and send
+    that answer down the same stream.  Once text or a tool call has gone out,
+    end with an error Claude Code retries instead.
+
+    Go streams sometimes hang at large contexts.  Three in a row went quiet
+    for 120s at ~700k tokens, and Claude Code, retrying each from scratch,
+    spent ten minutes on them.  Then it fell back to an unstreamed request on
+    its own, which answered in 78s."""
+    started = answering = False
+    open_blocks: set[int] = set()
+    next_index = 0
+    last = time.monotonic()
+    quiet = 0.0
+    try:
+        async for chunk in translate_stream(upstream):
+            now = time.monotonic()
+            quiet, last = max(quiet, now - last), now
+            if chunk.startswith(b"event: message_start"):
+                started = True
+            elif chunk.startswith(b"event: content_block_st"):  # start or stop
+                event = json.loads(chunk.split(b"\ndata: ", 1)[1])
+                if event["type"] == "content_block_start":
+                    open_blocks.add(event["index"])
+                    next_index = max(next_index, event["index"] + 1)
+                    answering = answering or event["content_block"]["type"] != "thinking"
+                else:
+                    open_blocks.discard(event["index"])
+            yield chunk
+        if quiet >= 30:
+            # Data for tuning _GO_STREAM_READ_TIMEOUT_S: how long a stream
+            # that did finish went without an event.
+            log.info("upstream stream finished; longest quiet spell %.0fs", quiet)
+        return
+    except httpx.HTTPError as e:
+        broke = e
+    name = type(broke).__name__
+    if fallback_request is None or answering:
+        log.warning("upstream stream broke (%s): %s", name, broke)
+        yield _stream_error(f"upstream stream broke ({name}); retrying")
+        return
+    log.warning("upstream stream broke (%s) before the answer began; asking again without streaming", name)
+    await upstream.aclose()
+    for index in sorted(open_blocks):
+        yield _sse("content_block_stop", {"type": "content_block_stop", "index": index})
+    try:
+        message = await _answer_without_streaming(fallback_request(), translate_response)
+    except Exception as e:
+        log.warning("unstreamed retry failed: %s", e)
+        yield _stream_error(f"upstream stream broke ({name}) and the unstreamed retry failed; retrying")
+        return
+    for chunk in _message_events(message, next_index, started):
+        yield chunk
+
+
 async def _send_translated(upstream_request: httpx.Request, streaming: bool,
-                           translate_stream, translate_response) -> Response:
+                           translate_stream, translate_response,
+                           fallback_request=None) -> Response:
     """Send a translated request and translate the reply back to Anthropic
-    shape.  An upstream error passes through untranslated, status intact."""
+    shape.  An upstream error passes through untranslated, status intact.
+    `fallback_request` builds the same request unstreamed, for
+    _stream_or_fallback."""
     if streaming:
         upstream = await _PROXY_CLIENT.send(upstream_request, stream=True)
         if upstream.status_code >= 400:
@@ -2047,15 +2189,9 @@ async def _send_translated(upstream_request: httpx.Request, streaming: bool,
 
         async def gen():
             try:
-                async for chunk in _with_keepalive(translate_stream(upstream)):
+                async for chunk in _with_keepalive(_stream_or_fallback(
+                        upstream, translate_stream, translate_response, fallback_request)):
                     yield chunk
-            except httpx.HTTPError as e:
-                # A hung or dropped upstream: end the stream with an error that
-                # Claude Code retries, rather than cutting the connection.
-                log.warning("upstream stream broke (%s): %s", type(e).__name__, e)
-                yield ("event: error\ndata: " + json.dumps({"type": "error", "error": {
-                    "type": "overloaded_error",
-                    "message": f"upstream stream broke ({type(e).__name__}); retrying"}}) + "\n\n").encode()
             finally:
                 await upstream.aclose()
 
@@ -2135,33 +2271,35 @@ async def _proxy_opencode_go(request: Request, payload: dict, model: str,
         ), streaming)
 
     headers["Authorization"] = f"Bearer {OPENCODE_GO_API_KEY}"
+
+    def go_request(path: str, body: dict, stream: bool) -> httpx.Request:
+        return _PROXY_CLIENT.build_request(
+            "POST", f"{OPENCODE_GO_URL}{path}", json=body if stream else _unstreamed(body),
+            headers=headers, timeout=_go_timeout(stream),
+        )
+
     if wire == "responses":
+        body = _anthropic_to_responses_request(payload)
         return await _send_translated(
-            _PROXY_CLIENT.build_request(
-                "POST", f"{OPENCODE_GO_URL}/responses",
-                json=_anthropic_to_responses_request(payload), headers=headers,
-                timeout=_go_timeout(streaming),
-            ),
-            streaming,
+            go_request("/responses", body, streaming), streaming,
             lambda upstream: _translate_responses_stream(upstream, model, msg_id),
             _responses_to_anthropic_response,
+            lambda: go_request("/responses", body, False),
         )
 
     openai_body = _anthropic_to_openai_request(payload)
     openai_body.pop("reasoning", None)  # OpenRouter's knob; Go has no use for it
     return await _send_translated(
-        _PROXY_CLIENT.build_request(
-            "POST", f"{OPENCODE_GO_URL}/chat/completions", json=openai_body, headers=headers,
-            timeout=_go_timeout(streaming),
-        ),
-        streaming,
+        go_request("/chat/completions", openai_body, streaming), streaming,
         lambda upstream: _translate_stream(upstream, model, msg_id),
         lambda data: _openai_to_anthropic_response(data, model),
+        lambda: go_request("/chat/completions", openai_body, False),
     )
 
 
 @app.api_route("/anthropic/v1/messages", methods=["POST"])
 async def proxy_messages(request: Request) -> Response:
+    _note_model_request(request)
     body = await request.body()
     try:
         payload = json.loads(body) if body else {}
@@ -2259,6 +2397,7 @@ def list_models() -> dict:
 @app.api_route("/v1/chat/completions", methods=["POST"])
 @app.api_route("/openai/v1/chat/completions", methods=["POST"])
 async def proxy_chat_completions(request: Request) -> Response:
+    _note_model_request(request)
     body = await request.body()
     try:
         payload = json.loads(body) if body else {}
