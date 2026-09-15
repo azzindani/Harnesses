@@ -1411,6 +1411,23 @@ def _anthropic_to_openai_request(payload: dict) -> dict:
     return out
 
 
+def _anthropic_usage(total_input, details, output) -> dict:
+    """Anthropic usage block from OpenAI-style token counts.
+
+    OpenAI counts cached prompt tokens inside the input total and names them in
+    `prompt_tokens_details` / `input_tokens_details.cached_tokens`; Anthropic
+    reports them apart, as `cache_read_input_tokens`. Claude Code sizes the
+    context from the sum, so the split changes nothing there. It does price
+    cache reads at the cache rate, though, and OpenCode Go serves most of a
+    long conversation from cache (13,283 of 13,319 tokens on a repeated
+    request), so passing them off as fresh input inflated the cost estimate.
+    """
+    total = int(total_input or 0)
+    cached = min(int((details or {}).get("cached_tokens") or 0), total)
+    return {"input_tokens": total - cached, "cache_read_input_tokens": cached,
+            "output_tokens": int(output or 0)}
+
+
 def _norm_model(m: str) -> str:
     """Strip the :free/:nitro variant tag for model-identity comparison."""
     return (m or "").split(":")[0]
@@ -1473,10 +1490,8 @@ def _openai_to_anthropic_response(data: dict, requested: str = "") -> dict:
         "content": content,
         "stop_reason": _FINISH_TO_STOP.get(choice.get("finish_reason"), "end_turn"),
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": usage.get("prompt_tokens", 0),
-            "output_tokens": usage.get("completion_tokens", 0),
-        },
+        "usage": _anthropic_usage(usage.get("prompt_tokens"), usage.get("prompt_tokens_details"),
+                                  usage.get("completion_tokens")),
     }
 
 
@@ -1644,10 +1659,8 @@ async def _translate_stream(upstream: httpx.Response, model: str, msg_id: str):
         # input_tokens too: message_start went out before the upstream counted
         # them, and without them Claude Code cannot tell how full the context
         # is, so auto-compact never fires.
-        "usage": {
-            "input_tokens": final_usage.get("prompt_tokens", 0),
-            "output_tokens": final_usage.get("completion_tokens", 0),
-        },
+        "usage": _anthropic_usage(final_usage.get("prompt_tokens"), final_usage.get("prompt_tokens_details"),
+                                  final_usage.get("completion_tokens")),
     })
     yield sse("message_stop", {"type": "message_stop"})
 
@@ -1741,7 +1754,9 @@ def _anthropic_to_responses_request(payload: dict) -> dict:
             out["tool_choice"] = {"auto": "auto", "any": "required", "none": "none"}[tct]
 
     if "max_tokens" in payload:
-        out["max_output_tokens"] = payload["max_tokens"]
+        # /responses rejects anything under 16, and Claude Code probes a
+        # model picked with /model using max_tokens=1.
+        out["max_output_tokens"] = max(int(payload["max_tokens"]), 16)
     if payload.get("stream"):
         out["stream"] = True
     return out
@@ -1779,10 +1794,8 @@ def _responses_to_anthropic_response(data: dict) -> dict:
         "content": content or [{"type": "text", "text": ""}],
         "stop_reason": _responses_stop_reason(data, any(b["type"] == "tool_use" for b in content)),
         "stop_sequence": None,
-        "usage": {
-            "input_tokens": usage.get("input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
-        },
+        "usage": _anthropic_usage(usage.get("input_tokens"), usage.get("input_tokens_details"),
+                                  usage.get("output_tokens")),
     }
 
 
@@ -1884,10 +1897,8 @@ async def _translate_responses_stream(upstream: httpx.Response, model: str, msg_
         "type": "message_delta",
         "delta": {"stop_reason": _responses_stop_reason(final, used_tool), "stop_sequence": None},
         # See _translate_stream: the context size has to arrive here.
-        "usage": {
-            "input_tokens": usage.get("input_tokens", 0),
-            "output_tokens": usage.get("output_tokens", 0),
-        },
+        "usage": _anthropic_usage(usage.get("input_tokens"), usage.get("input_tokens_details"),
+                                  usage.get("output_tokens")),
     })
     yield sse("message_stop", {"type": "message_stop"})
 

@@ -9,4 +9,5 @@ RUN echo "claude-code ref: ${CLAUDE_CODE_REF}" \
     && claude --version
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+COPY statusline.py /opt/claude-statusline.py
 CMD ["/entrypoint.sh"]

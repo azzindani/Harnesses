@@ -58,6 +58,51 @@ echo "  Haiku            = $ANTHROPIC_DEFAULT_HAIKU_MODEL"
 echo "  Custom           = $ANTHROPIC_CUSTOM_MODEL_OPTION"
 echo "  (type '/model <id>' to pick any other free model from the catalog)"
 
+# ── Real per-model rates for Claude Code's cost estimate ──────────────────────
+# Claude Code prices a model it doesn't recognize at list rates, so the status
+# line's `est $` for Muse Spark read ~50x what OpenCode Go charges. modelPricing
+# fixes the rates, but only from managed settings, and the file-based source,
+# /etc/claude-code/managed-settings.json, is ours to write in this image
+# (Claude Code reloads it when it changes). Rates are OpenCode Go's, from
+# models.dev (the catalog opencode itself prices from), keyed by every spelling
+# a session can carry: the bare id, the `[1m]` context-window suffix, and the
+# `anthropic/` prefix the /model picker adds. Every free OpenRouter model is $0.
+# Rebuilt each boot; if models.dev is unreachable the previous file stays.
+mkdir -p /etc/claude-code
+python3 - "$IDS" <<'PY' || echo "pricing: WARNING could not write modelPricing"
+import json, os, sys, urllib.request
+free_ids = sys.argv[1].split()
+try:
+    # models.dev answers Python's default "Python-urllib" user agent with 403.
+    req = urllib.request.Request("https://models.dev/api.json",
+                                 headers={"User-Agent": "harness-lab (claude entrypoint)"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        go = json.load(r).get("opencode-go", {}).get("models", {})
+except Exception as e:
+    print(f"pricing: models.dev unreachable ({e}); keeping previous rates")
+    sys.exit(0)
+overrides = {}
+for mid, m in go.items():
+    c = m.get("cost") or {}
+    if "input" not in c or "output" not in c:
+        continue
+    rate = {"input": c["input"], "output": c["output"],
+            "cacheRead": c.get("cache_read", c["input"]),
+            "cacheWrite": c.get("cache_write", c["input"])}
+    for key in (f"opencode-go/{mid}", f"opencode-go/{mid}[1m]",
+                f"anthropic/opencode-go/{mid}", f"anthropic/opencode-go/{mid}[1m]"):
+        overrides[key] = rate
+zero = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+for mid in free_ids:
+    overrides.setdefault(mid, zero)
+    overrides.setdefault(f"anthropic/{mid}", zero)
+path = "/etc/claude-code/managed-settings.json"
+with open(path + ".tmp", "w") as f:
+    json.dump({"modelPricing": {"overrides": overrides}}, f, indent=1)
+os.replace(path + ".tmp", path)
+print(f"pricing: {len(go)} OpenCode Go models, {len(free_ids)} free OpenRouter models")
+PY
+
 # ── Register MCP servers ─────────────────────────────────────────────────────
 # Containers are ephemeral, so MCP servers are (re)registered at every boot from
 # env vars rather than baked into a persisted config.  The *_MCP_* vars come
@@ -163,7 +208,13 @@ SETTINGS="$HOME/.claude/settings.json"
 mkdir -p "$HOME/.claude"
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 _tmp=$(mktemp)
-if jq '.theme = "light"' "$SETTINGS" > "$_tmp" 2>/dev/null; then
+# The status line shows model, thinking effort, directory, context used and
+# Claude Code's estimated session cost (harnesses/claude/statusline.py, baked
+# into the image), set the same idempotent way. -B keeps Python from writing
+# __pycache__ into /opt.
+if jq '.theme = "light"
+       | .statusLine = {type: "command", command: "python3 -B /opt/claude-statusline.py"}' \
+       "$SETTINGS" > "$_tmp" 2>/dev/null; then
     mv "$_tmp" "$SETTINGS"
 else
     rm -f "$_tmp"
