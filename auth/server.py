@@ -1528,6 +1528,15 @@ async def _translate_stream(upstream: httpx.Response, model: str, msg_id: str):
         except json.JSONDecodeError:
             continue
 
+        # A provider failing after the 200 went out arrives as a chunk carrying
+        # `error`.  Relay it as the stream's error event rather than closing
+        # the message as if the model had finished.
+        if chunk.get("error"):
+            status, etype, message = _upstream_error(chunk["error"])
+            log.warning("upstream %d mid-stream (%s): %s", status, model, message[:300])
+            yield sse("error", {"type": "error", "error": {"type": etype, "message": message}})
+            return
+
         # Emit message_start lazily, using the model the upstream actually
         # served — so a fallback is reported truthfully, not as the requested
         # model.  If it differs, lead with a one-line, visible switch notice.
@@ -1889,6 +1898,35 @@ def _anthropic_error(status: int, etype: str, message: str) -> Response:
                     status_code=status, media_type="application/json")
 
 
+# Anthropic's error `type` per status.  502/503 map to overloaded_error because
+# that is what they mean from OpenRouter ("model is down", "no provider") and
+# it is the type Claude Code retries when it arrives mid-stream; a non-streamed
+# 5xx is retried on its status anyway.
+_ANTHROPIC_ERROR_TYPES = {
+    400: "invalid_request_error", 401: "authentication_error", 402: "billing_error",
+    403: "permission_error", 404: "not_found_error", 413: "request_too_large",
+    429: "rate_limit_error", 502: "overloaded_error", 503: "overloaded_error",
+    529: "overloaded_error",
+}
+
+
+def _upstream_error(err) -> tuple[int, str, str]:
+    """(status, Anthropic error type, message) for an OpenAI-style `error`
+    object that arrived with a 200 -- OpenRouter's {code, message, metadata}.
+
+    OpenRouter sends one when a provider fails after the 200 is already
+    committed ("Upstream error from Nvidia: Service temporarily overloaded",
+    code 502): as the whole body of a non-streamed reply, or as a chunk with
+    finish_reason "error" mid-stream.  Translated as if it were a reply, it
+    became an empty assistant turn that Claude Code accepted as the answer.
+    """
+    if not isinstance(err, dict):
+        err = {"message": str(err)}
+    code = err.get("code")
+    status = code if isinstance(code, int) and 400 <= code <= 599 else 502
+    return status, _ANTHROPIC_ERROR_TYPES.get(status, "api_error"), str(err.get("message") or "upstream error")
+
+
 async def _send_translated(upstream_request: httpx.Request, streaming: bool,
                            translate_stream, translate_response) -> Response:
     """Send a translated request and translate the reply back to Anthropic
@@ -1917,7 +1955,12 @@ async def _send_translated(upstream_request: httpx.Request, streaming: bool,
         return Response(content=upstream.content, status_code=upstream.status_code,
                         media_type=upstream.headers.get("content-type", "application/json"))
     try:
-        translated = translate_response(upstream.json())
+        data = upstream.json()
+        if isinstance(data, dict) and data.get("error") and not (data.get("choices") or data.get("output")):
+            status, etype, message = _upstream_error(data["error"])
+            log.warning("upstream %d inside a 200: %s", status, message[:300])
+            return _anthropic_error(status, etype, message)
+        translated = translate_response(data)
         return Response(content=json.dumps(translated), status_code=200,
                         media_type="application/json")
     except Exception as e:
