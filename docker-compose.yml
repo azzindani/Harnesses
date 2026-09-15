@@ -312,6 +312,17 @@ services:
       # opencode-go/muse-spark-1.3-contributor; the entrypoint applies it.
       # Unset, Claude uses MODEL_NAME like every other harness.
       CLAUDE_MODEL: ${CLAUDE_MODEL:-}
+      # Fullscreen renderer, without mouse capture. Since Claude Code 2.1 the
+      # default renderer is inline: the conversation goes into tmux's pane
+      # history, which the browser cannot wheel through (tmux mouse is off so
+      # drag-to-copy stays native), and PageUp -- what ttyd-kbfix sends for
+      # the wheel -- does nothing there. Fullscreen draws on the alternate
+      # screen and scrolls its own transcript on PageUp/PageDown, so the wheel
+      # works again, and it keeps memory flat in long conversations.
+      # DISABLE_MOUSE stops it requesting mouse reporting, which tmux would
+      # pass through to the browser and take drag-select away.
+      CLAUDE_CODE_NO_FLICKER: "1"
+      CLAUDE_CODE_DISABLE_MOUSE: "1"
 
   harness-aider:
     <<: *harness-defaults
