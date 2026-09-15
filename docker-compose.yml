@@ -309,7 +309,8 @@ services:
     environment:
       <<: *anthropic-env
       # This harness's own default model (main session + subagents), e.g.
-      # opencode-go/muse-spark-1.3-contributor; the entrypoint applies it.
+      # opencode-go/muse-spark-1.3-contributor[1m] ([1m] = 1M context window);
+      # the entrypoint applies it.
       # Unset, Claude uses MODEL_NAME like every other harness.
       CLAUDE_MODEL: ${CLAUDE_MODEL:-}
       # Fullscreen renderer, without mouse capture. Since Claude Code 2.1 the
