@@ -1054,6 +1054,99 @@ _free_model_ids: list[str] = []
 _free_models_catalog: list[dict] = []
 _free_models_ts: float = 0.0
 
+# ── OpenCode Go (a second provider, Claude Code only) ─────────────────────────
+# An OpenCode Go subscription is a flat monthly fee for open coding models (GLM,
+# Kimi, Qwen, MiniMax, DeepSeek, Muse Spark, …).  Claude Code uses it next to
+# the free OpenRouter catalog: pick `opencode-go/<id>` in /model and that
+# request goes to Go; every other model stays on OpenRouter.  Leave
+# OPENCODE_GO_API_KEY blank and none of this exists -- no picker entries, no
+# route.
+#
+# Go serves each model family on exactly ONE wire format, and the wrong
+# endpoint fails outright ("Model grok-4.6 is not supported for format
+# oa-compat", or a bare 500 for gpt-5.6-luna on /chat/completions):
+#   anthropic  /messages          MiniMax -- relayed byte-for-byte
+#   responses  /responses         GPT, Grok, Muse Spark -- translated
+#   chat       /chat/completions  everything else (GLM, Kimi, Qwen, DeepSeek, …)
+# Qwen answers on /messages too, but chat works and keeps the rule to prefixes.
+#
+# Go asks every client for its own user agent and a stable per-conversation
+# `x-opencode-session`, which it routes and prompt-caches on.  Claude Code's
+# `x-claude-code-session-id` is exactly that value, so it goes up under both
+# names along with Claude Code's own user agent.
+#
+# The subscription is the operator's, and a flat fee is precisely what a
+# 44-phase unattended sweep would drain.  So the key lives here, never in a
+# harness (the harness keeps sending its OpenRouter key; this proxy swaps in
+# the Go one), and only containers named in OPENCODE_GO_CLIENTS may use it.
+OPENCODE_GO_API_KEY = os.environ.get("OPENCODE_GO_API_KEY", "").strip()
+OPENCODE_GO_URL = os.environ.get("OPENCODE_GO_URL", "https://opencode.ai/zen/go/v1").rstrip("/")
+OPENCODE_GO_CLIENTS = {
+    c.strip() for c in os.environ.get("OPENCODE_GO_CLIENTS", "harness-claude").split(",") if c.strip()
+}
+OPENCODE_GO_PREFIX = "opencode-go/"
+OPENCODE_GO_USER_AGENT = "harness-lab (claude-code bridge)"
+
+_go_model_ids: list[str] = []
+_go_client_ips: set[str] = set()
+_go_client_ips_ts: float = 0.0
+
+
+def _go_wire_format(model: str) -> str:
+    """Which Go endpoint serves `model`: "anthropic", "responses" or "chat"."""
+    if model.startswith("minimax-"):
+        return "anthropic"
+    if model.startswith(("gpt-", "grok-", "muse-spark-")):
+        return "responses"
+    return "chat"
+
+
+async def _refresh_go_models() -> None:
+    """Cache Go's model list (a public endpoint) for Claude Code's picker."""
+    global _go_model_ids
+    if not OPENCODE_GO_API_KEY:
+        return
+    try:
+        resp = await _PROXY_CLIENT.get(f"{OPENCODE_GO_URL}/models")
+        resp.raise_for_status()
+        ids = [m["id"] for m in resp.json().get("data", []) or [] if m.get("id")]
+    except Exception as e:
+        log.warning("opencode-go catalog refresh failed: %s", e)
+        return
+    if ids:
+        _go_model_ids = ids
+        log.info("opencode-go catalog: %d models", len(ids))
+
+
+def _go_client_ips_now() -> set[str]:
+    ips: set[str] = set()
+    for name in OPENCODE_GO_CLIENTS:
+        try:
+            networks = docker_client.containers.get(name).attrs["NetworkSettings"]["Networks"]
+        except NotFound:
+            continue
+        except Exception as e:
+            log.warning("opencode-go: cannot inspect %s: %s", name, e)
+            continue
+        ips.update(n["IPAddress"] for n in networks.values() if n.get("IPAddress"))
+    return ips
+
+
+async def _is_go_client(host: str | None) -> bool:
+    """True when a request comes from a container named in OPENCODE_GO_CLIENTS.
+
+    Keyed on the source address, which a harness cannot pick for itself.  A
+    match is trusted for five minutes; anything else re-inspects first, so a
+    recreated container (new IP) is recognised on its very next request."""
+    global _go_client_ips, _go_client_ips_ts
+    if not host:
+        return False
+    if host in _go_client_ips and time.time() - _go_client_ips_ts < 300:
+        return True
+    _go_client_ips = await asyncio.to_thread(_go_client_ips_now)
+    _go_client_ips_ts = time.time()
+    return host in _go_client_ips
+
 
 def _is_free(pricing: dict) -> bool:
     """A model is free only when both prompt and completion cost nothing."""
@@ -1113,13 +1206,16 @@ async def _refresh_free_models() -> None:
 
 
 async def _free_models_sweep() -> None:
-    """Refresh the catalog at startup and every FREE_MODELS_REFRESH_MIN."""
+    """Refresh both catalogs -- OpenRouter's free models and, when configured,
+    OpenCode Go's -- at startup and every FREE_MODELS_REFRESH_MIN."""
     await _refresh_free_models()
+    await _refresh_go_models()
     if FREE_MODELS_REFRESH_MIN <= 0:
         return
     while True:
         await asyncio.sleep(FREE_MODELS_REFRESH_MIN * 60)
         await _refresh_free_models()
+        await _refresh_go_models()
 
 
 def _fallback_models(primary: str) -> list[str]:
@@ -1536,9 +1632,375 @@ async def _translate_stream(upstream: httpx.Response, model: str, msg_id: str):
             "stop_reason": _FINISH_TO_STOP.get(final_finish, "end_turn"),
             "stop_sequence": None,
         },
-        "usage": {"output_tokens": final_usage.get("completion_tokens", 0)},
+        # input_tokens too: message_start went out before the upstream counted
+        # them, and without them Claude Code cannot tell how full the context
+        # is, so auto-compact never fires.
+        "usage": {
+            "input_tokens": final_usage.get("prompt_tokens", 0),
+            "output_tokens": final_usage.get("completion_tokens", 0),
+        },
     })
     yield sse("message_stop", {"type": "message_stop"})
+
+
+# ── Anthropic ⇄ OpenAI Responses (OpenCode Go's GPT / Grok / Muse Spark) ──────
+
+def _responses_message(role: str, parts: list) -> dict:
+    """One Responses input message from accumulated text/image parts."""
+    if role == "assistant":
+        return {"role": "assistant", "content": "".join(p.get("text", "") for p in parts)}
+    return {"role": role, "content": parts}
+
+
+def _anthropic_to_responses_request(payload: dict) -> dict:
+    """Translate an Anthropic /v1/messages body → OpenAI /v1/responses.
+
+    The same walk as _anthropic_to_openai_request, but Responses keeps one flat,
+    ordered `input` list in which a tool call and its result are items of their
+    own (`function_call` / `function_call_output`), and the system prompt is
+    `instructions`.  temperature/top_p are left out: these are reasoning models,
+    and reasoning endpoints reject sampling knobs rather than ignore them.
+    """
+    out: dict = {"model": payload.get("model"), "input": [], "store": False}
+
+    sys = payload.get("system")
+    if isinstance(sys, list):
+        sys = "\n\n".join(b.get("text", "") for b in sys if b.get("type") == "text")
+    if sys:
+        out["instructions"] = sys
+
+    for msg in payload.get("messages", []) or []:
+        role = msg.get("role")
+        content = msg.get("content")
+        if isinstance(content, str):
+            out["input"].append({"role": role, "content": content})
+            continue
+
+        # Text and images accumulate into one message; a tool call or tool
+        # result closes it, since those go in as separate items, in order.
+        parts: list = []
+        for block in content or []:
+            btype = block.get("type")
+            if btype == "text":
+                parts.append({"type": "input_text", "text": block.get("text", "")})
+            elif btype == "image":
+                src = block.get("source") or {}
+                if src.get("type") == "base64":
+                    url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
+                    parts.append({"type": "input_image", "image_url": url})
+            elif btype in ("tool_use", "tool_result"):
+                if parts:
+                    out["input"].append(_responses_message(role, parts))
+                    parts = []
+                if btype == "tool_use":
+                    out["input"].append({
+                        "type": "function_call",
+                        "call_id": block.get("id"),
+                        "name": block.get("name"),
+                        "arguments": json.dumps(block.get("input", {})),
+                    })
+                else:
+                    tc = block.get("content", "")
+                    if isinstance(tc, list):
+                        tc = "".join(c.get("text", "") for c in tc if c.get("type") == "text")
+                    out["input"].append({
+                        "type": "function_call_output",
+                        "call_id": block.get("tool_use_id"),
+                        "output": tc if isinstance(tc, str) else json.dumps(tc),
+                    })
+        if parts:
+            out["input"].append(_responses_message(role, parts))
+
+    tools = payload.get("tools")
+    if tools:
+        out["tools"] = [
+            {
+                "type": "function",
+                "name": t.get("name"),
+                "description": t.get("description", ""),
+                "parameters": _normalize_schema(t.get("input_schema") or {"type": "object", "properties": {}}),
+            }
+            for t in tools
+        ]
+
+    tc = payload.get("tool_choice")
+    if isinstance(tc, dict):
+        tct = tc.get("type")
+        if tct == "tool":
+            out["tool_choice"] = {"type": "function", "name": tc.get("name")}
+        elif tct in ("auto", "any", "none"):
+            out["tool_choice"] = {"auto": "auto", "any": "required", "none": "none"}[tct]
+
+    if "max_tokens" in payload:
+        out["max_output_tokens"] = payload["max_tokens"]
+    if payload.get("stream"):
+        out["stream"] = True
+    return out
+
+
+def _responses_stop_reason(response: dict, used_tool: bool) -> str:
+    if used_tool:
+        return "tool_use"
+    if (response.get("incomplete_details") or {}).get("reason") == "max_output_tokens":
+        return "max_tokens"
+    return "end_turn"
+
+
+def _responses_to_anthropic_response(data: dict) -> dict:
+    """OpenAI response object → Anthropic /v1/messages non-streaming response."""
+    content: list = []
+    for item in data.get("output") or []:
+        if item.get("type") == "message":
+            text = "".join(c.get("text", "") for c in item.get("content") or [] if c.get("type") == "output_text")
+            if text:
+                content.append({"type": "text", "text": text})
+        elif item.get("type") == "function_call":
+            try:
+                args = json.loads(item.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            content.append({"type": "tool_use", "id": item.get("call_id"), "name": item.get("name"), "input": args})
+
+    usage = data.get("usage") or {}
+    return {
+        "id": data.get("id", ""),
+        "type": "message",
+        "role": "assistant",
+        "model": data.get("model", ""),
+        "content": content or [{"type": "text", "text": ""}],
+        "stop_reason": _responses_stop_reason(data, any(b["type"] == "tool_use" for b in content)),
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+        },
+    }
+
+
+async def _translate_responses_stream(upstream: httpx.Response, model: str, msg_id: str):
+    """Convert an OpenAI /v1/responses SSE stream → Anthropic /v1/messages SSE.
+
+    Responses already streams in blocks: each output item is announced
+    (`response.output_item.added`), filled (`…output_text.delta`,
+    `…function_call_arguments.delta`) and closed (`response.output_item.done`).
+    So each text message or function call becomes one Anthropic content block,
+    keyed on the item's `output_index`; reasoning items are dropped, as the
+    chat path drops reasoning.
+    """
+
+    def sse(event: str, data: dict) -> bytes:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
+
+    blocks: dict[int, int] = {}      # output_index → Anthropic block index
+    args_streamed: set[int] = set()
+    next_block_index = 0
+    used_tool = False
+    final: dict = {}
+
+    yield sse("message_start", {
+        "type": "message_start",
+        "message": {
+            "id": msg_id, "type": "message", "role": "assistant", "model": model,
+            "content": [], "stop_reason": None, "stop_sequence": None,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        },
+    })
+
+    async for raw in upstream.aiter_lines():
+        if not raw.startswith("data: "):
+            continue
+        try:
+            ev = json.loads(raw[6:])
+        except json.JSONDecodeError:
+            continue
+        etype = ev.get("type", "")
+        oi = ev.get("output_index")
+
+        if etype == "response.output_item.added":
+            item = ev.get("item") or {}
+            if item.get("type") == "function_call":
+                used_tool = True
+                blocks[oi] = next_block_index
+                next_block_index += 1
+                yield sse("content_block_start", {
+                    "type": "content_block_start",
+                    "index": blocks[oi],
+                    "content_block": {"type": "tool_use", "id": item.get("call_id"),
+                                      "name": item.get("name", ""), "input": {}},
+                })
+        elif etype == "response.output_text.delta":
+            if oi not in blocks:
+                blocks[oi] = next_block_index
+                next_block_index += 1
+                yield sse("content_block_start", {
+                    "type": "content_block_start",
+                    "index": blocks[oi],
+                    "content_block": {"type": "text", "text": ""},
+                })
+            yield sse("content_block_delta", {
+                "type": "content_block_delta",
+                "index": blocks[oi],
+                "delta": {"type": "text_delta", "text": ev.get("delta", "")},
+            })
+        elif etype == "response.function_call_arguments.delta" and oi in blocks:
+            args_streamed.add(oi)
+            yield sse("content_block_delta", {
+                "type": "content_block_delta",
+                "index": blocks[oi],
+                "delta": {"type": "input_json_delta", "partial_json": ev.get("delta", "")},
+            })
+        elif etype == "response.output_item.done" and oi in blocks:
+            item = ev.get("item") or {}
+            # Some upstreams send a call's arguments only once, complete.
+            if item.get("type") == "function_call" and oi not in args_streamed and item.get("arguments"):
+                yield sse("content_block_delta", {
+                    "type": "content_block_delta",
+                    "index": blocks[oi],
+                    "delta": {"type": "input_json_delta", "partial_json": item["arguments"]},
+                })
+            yield sse("content_block_stop", {"type": "content_block_stop", "index": blocks.pop(oi)})
+        elif etype in ("response.completed", "response.incomplete"):
+            final = ev.get("response") or {}
+        elif etype in ("response.failed", "error"):
+            err = (ev.get("response") or {}).get("error") if etype == "response.failed" else ev
+            message = (err or {}).get("message") or "upstream error"
+            log.warning("responses stream failed (%s): %s", model, message)
+            yield sse("error", {"type": "error", "error": {"type": "api_error", "message": message}})
+            return
+
+    for bi in blocks.values():
+        yield sse("content_block_stop", {"type": "content_block_stop", "index": bi})
+    usage = final.get("usage") or {}
+    yield sse("message_delta", {
+        "type": "message_delta",
+        "delta": {"stop_reason": _responses_stop_reason(final, used_tool), "stop_sequence": None},
+        # See _translate_stream: the context size has to arrive here.
+        "usage": {
+            "input_tokens": usage.get("input_tokens", 0),
+            "output_tokens": usage.get("output_tokens", 0),
+        },
+    })
+    yield sse("message_stop", {"type": "message_stop"})
+
+
+def _anthropic_error(status: int, etype: str, message: str) -> Response:
+    """An error in the shape Claude Code reads: {"type":"error","error":{…}}."""
+    return Response(content=json.dumps({"type": "error", "error": {"type": etype, "message": message}}),
+                    status_code=status, media_type="application/json")
+
+
+async def _send_translated(upstream_request: httpx.Request, streaming: bool,
+                           translate_stream, translate_response) -> Response:
+    """Send a translated request and translate the reply back to Anthropic
+    shape.  An upstream error passes through untranslated, status intact."""
+    if streaming:
+        upstream = await _PROXY_CLIENT.send(upstream_request, stream=True)
+        if upstream.status_code >= 400:
+            text = await upstream.aread()
+            await upstream.aclose()
+            log.warning("upstream %d: %s", upstream.status_code, text[:300])
+            return Response(content=text, status_code=upstream.status_code,
+                            media_type=upstream.headers.get("content-type", "application/json"))
+
+        async def gen():
+            try:
+                async for chunk in translate_stream(upstream):
+                    yield chunk
+            finally:
+                await upstream.aclose()
+
+        return StreamingResponse(gen(), status_code=200, media_type="text/event-stream")
+
+    upstream = await _PROXY_CLIENT.send(upstream_request)
+    if upstream.status_code >= 400:
+        log.warning("upstream %d: %s", upstream.status_code, upstream.text[:300])
+        return Response(content=upstream.content, status_code=upstream.status_code,
+                        media_type=upstream.headers.get("content-type", "application/json"))
+    try:
+        translated = translate_response(upstream.json())
+        return Response(content=json.dumps(translated), status_code=200,
+                        media_type="application/json")
+    except Exception as e:
+        log.exception("translation failed: %s", e)
+        return Response(content=upstream.content, status_code=502,
+                        media_type=upstream.headers.get("content-type", "application/json"))
+
+
+async def _relay(upstream_request: httpx.Request, streaming: bool) -> Response:
+    """Pass an upstream Anthropic-shaped reply through untouched."""
+    upstream = await _PROXY_CLIENT.send(upstream_request, stream=streaming)
+    media_type = upstream.headers.get("content-type", "application/json")
+    if not streaming or upstream.status_code >= 400:
+        content = await upstream.aread()
+        await upstream.aclose()
+        if upstream.status_code >= 400:
+            log.warning("upstream %d: %s", upstream.status_code, content[:300])
+        return Response(content=content, status_code=upstream.status_code, media_type=media_type)
+
+    async def gen():
+        try:
+            async for chunk in upstream.aiter_raw():
+                yield chunk
+        finally:
+            await upstream.aclose()
+
+    return StreamingResponse(gen(), status_code=upstream.status_code, media_type=media_type)
+
+
+async def _proxy_opencode_go(request: Request, payload: dict, model: str,
+                             streaming: bool, msg_id: str) -> Response:
+    """Serve one `opencode-go/<model>` request from the OpenCode Go subscription."""
+    if not OPENCODE_GO_API_KEY:
+        return _anthropic_error(404, "not_found_error",
+                                "opencode-go models need OPENCODE_GO_API_KEY in .env")
+    client = request.client.host if request.client else None
+    if not await _is_go_client(client):
+        log.warning("opencode-go: refused %s from %s (not in OPENCODE_GO_CLIENTS)", model, client)
+        return _anthropic_error(403, "permission_error",
+                                "opencode-go models are limited to the containers in OPENCODE_GO_CLIENTS")
+
+    payload["model"] = model
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": request.headers.get("user-agent") or OPENCODE_GO_USER_AGENT,
+    }
+    session = request.headers.get("x-claude-code-session-id")
+    if session:
+        headers["x-opencode-session"] = session
+        headers["x-claude-code-session-id"] = session
+    wire = _go_wire_format(model)
+
+    if wire == "anthropic":
+        # Go's /messages authenticates with x-api-key; a Bearer token there
+        # comes back "Missing API key".
+        headers["x-api-key"] = OPENCODE_GO_API_KEY
+        headers["anthropic-version"] = request.headers.get("anthropic-version", "2023-06-01")
+        return await _relay(_PROXY_CLIENT.build_request(
+            "POST", f"{OPENCODE_GO_URL}/messages", json=payload, headers=headers,
+        ), streaming)
+
+    headers["Authorization"] = f"Bearer {OPENCODE_GO_API_KEY}"
+    if wire == "responses":
+        return await _send_translated(
+            _PROXY_CLIENT.build_request(
+                "POST", f"{OPENCODE_GO_URL}/responses",
+                json=_anthropic_to_responses_request(payload), headers=headers,
+            ),
+            streaming,
+            lambda upstream: _translate_responses_stream(upstream, model, msg_id),
+            _responses_to_anthropic_response,
+        )
+
+    openai_body = _anthropic_to_openai_request(payload)
+    openai_body.pop("reasoning", None)  # OpenRouter's knob; Go has no use for it
+    return await _send_translated(
+        _PROXY_CLIENT.build_request(
+            "POST", f"{OPENCODE_GO_URL}/chat/completions", json=openai_body, headers=headers,
+        ),
+        streaming,
+        lambda upstream: _translate_stream(upstream, model, msg_id),
+        lambda data: _openai_to_anthropic_response(data, model),
+    )
 
 
 @app.api_route("/anthropic/v1/messages", methods=["POST"])
@@ -1560,6 +2022,9 @@ async def proxy_messages(request: Request) -> Response:
         model = model[len(GATEWAY_MODEL_PREFIX):]
         payload["model"] = model
     msg_id = "msg_" + str(int(time.time() * 1000))
+
+    if model.startswith(OPENCODE_GO_PREFIX):
+        return await _proxy_opencode_go(request, payload, model[len(OPENCODE_GO_PREFIX):], streaming, msg_id)
 
     openai_body = _anthropic_to_openai_request(payload)
 
@@ -1583,39 +2048,11 @@ async def proxy_messages(request: Request) -> Response:
     upstream_request = _PROXY_CLIENT.build_request(
         "POST", OPENROUTER_OPENAI, json=openai_body, headers=fwd_headers,
     )
-
-    if streaming:
-        upstream = await _PROXY_CLIENT.send(upstream_request, stream=True)
-        if upstream.status_code >= 400:
-            text = await upstream.aread()
-            await upstream.aclose()
-            log.warning("upstream %d: %s", upstream.status_code, text[:300])
-            return Response(content=text, status_code=upstream.status_code,
-                            media_type=upstream.headers.get("content-type", "application/json"))
-
-        async def gen():
-            try:
-                async for chunk in _translate_stream(upstream, model, msg_id):
-                    yield chunk
-            finally:
-                await upstream.aclose()
-
-        return StreamingResponse(gen(), status_code=200, media_type="text/event-stream")
-
-    upstream = await _PROXY_CLIENT.send(upstream_request)
-    if upstream.status_code >= 400:
-        log.warning("upstream %d: %s", upstream.status_code, upstream.text[:300])
-        return Response(content=upstream.content, status_code=upstream.status_code,
-                        media_type=upstream.headers.get("content-type", "application/json"))
-    try:
-        data = upstream.json()
-        translated = _openai_to_anthropic_response(data, model)
-        return Response(content=json.dumps(translated), status_code=200,
-                        media_type="application/json")
-    except Exception as e:
-        log.exception("translation failed: %s", e)
-        return Response(content=upstream.content, status_code=502,
-                        media_type=upstream.headers.get("content-type", "application/json"))
+    return await _send_translated(
+        upstream_request, streaming,
+        lambda upstream: _translate_stream(upstream, model, msg_id),
+        lambda data: _openai_to_anthropic_response(data, model),
+    )
 
 
 # ── OpenAI-compat passthrough (for OpenAI-protocol harnesses) ──────────────────
@@ -1635,8 +2072,10 @@ def list_models_anthropic() -> dict:
     with claude/anthropic to the /model picker, using `display_name` as the label.
     We prefix each free id with GATEWAY_MODEL_PREFIX so it passes that filter and
     show the real id as the display name; proxy_messages strips the prefix back.
+    OpenCode Go's models, when configured, follow as `opencode-go/<id>`.
     """
     ids = _free_model_ids or ([PRIMARY_MODEL] if PRIMARY_MODEL else [])
+    ids = ids + [OPENCODE_GO_PREFIX + mid for mid in _go_model_ids]
     data = [
         {"type": "model", "id": GATEWAY_MODEL_PREFIX + mid, "display_name": mid}
         for mid in ids

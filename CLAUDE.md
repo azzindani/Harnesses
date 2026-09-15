@@ -38,7 +38,7 @@ Shared Caddy reverse proxy (external to this repo — see caddy-snippet.txt)
 ```
 
 - **The browser cookie holds a minted *session* token, not the credential you logged in with.** `/issue` validates the presented `?token=`/Bearer and then mints a fresh HS256 session JWT (`kind: "session"`, `harness: "*"` under the default `SESSION_SCOPE=all`) for the cookie — so one login covers every subdomain including `files`, the long-lived `TOKEN_*`/`JWT_SECRET` never sits in a browser, and the clock starts at login. `/verify` slides it: when less than `SESSION_REFRESH_DAYS` remain (or the cookie predates this model), it returns the replacement as a complete Set-Cookie value in the `X-Harness-Session` header, which the Caddy `harness_auth` snippet `copy_headers` onto the request and the site block emits with `header +Set-Cookie`. Ported from Folio's editor session (`/root/Folio/src/editor/editor-auth.ts`), which is itself modelled on this lab's JWT module — keep the two conceptually in sync.
-- **One FastAPI service (`auth/server.py`)** does JWT-gated login, Sablier-style container lifecycle (start on request, stop after `IDLE_TIMEOUT_MIN` idle), and — for OpenAI-compat harnesses and Claude Code's Anthropic proxy — a translating proxy in front of OpenRouter that serves a self-updating catalog of free, tool-calling models and can transparently fail over between them. There is no separate Sablier/Traefik container; this one service does all of it.
+- **One FastAPI service (`auth/server.py`)** does JWT-gated login, Sablier-style container lifecycle (start on request, stop after `IDLE_TIMEOUT_MIN` idle), and — for OpenAI-compat harnesses and Claude Code's Anthropic proxy — a translating proxy in front of OpenRouter that serves a self-updating catalog of free, tool-calling models and can transparently fail over between them. With `OPENCODE_GO_API_KEY` set, the same `/anthropic` proxy also sends Claude Code's `opencode-go/<id>` models to an OpenCode Go subscription instead. Go serves each family on one wire format only, picked by name prefix in `_go_wire_format`: MiniMax is relayed as-is to `/messages` (which wants `x-api-key`, not Bearer), GPT/Grok/Muse Spark are translated to `/responses`, and everything else goes to `/chat/completions`. Only containers in `OPENCODE_GO_CLIENTS` (matched by source IP) may use it, so the sweep can't drain the flat-fee plan. There is no separate Sablier/Traefik container; this one service does all of it.
 - **No provider is hardcoded.** `.env.example` documents ready-made blocks for OpenRouter, NVIDIA NIM, build.nvidia.com, Anthropic, OpenAI, Groq, Together.ai, DeepSeek, and local Ollama — uncomment one. `PROVIDER_BASE_URL` / `PROVIDER_API_KEY` / `MODEL_NAME` (+ `PROVIDER_ANTHROPIC_URL` for Claude Code/Droid) drive all 11 harnesses.
 - **The reverse proxy is external to this repo.** A shared Caddy instance (this user's lives at `/root/caddy-router`, fronting other unrelated projects too) terminates TLS and routes subdomains in. `caddy-snippet.txt` is the block to append to it — this repo does not run Caddy itself.
 - **Multiple simultaneous sessions per harness are live**, not a future feature: `https://<harness>-<slug>.<domain>/?token=<jwt>` opens an extra tmux window + ttyd process inside that harness's one existing container/`/workspace` (up to `MAX_INSTANCES_PER_HARNESS`, default 5). It is deliberately not a separate container or volume per slug.
@@ -49,7 +49,7 @@ Shared Caddy reverse proxy (external to this repo — see caddy-snippet.txt)
 
 | Harness | Protocol | Config | Notes |
 |---|---|---|---|
-| Claude Code | Anthropic (`/v1/messages`) | env vars | via `auth`'s `/anthropic` translating proxy |
+| Claude Code | Anthropic (`/v1/messages`) | env vars | via `auth`'s `/anthropic` translating proxy; `opencode-go/<id>` models go to OpenCode Go |
 | Droid (Factory CLI) | Anthropic-shaped | `~/.factory/settings.json` | BYOK custom model |
 | Aider | OpenAI (`/v1/chat/completions`) | env vars | |
 | OpenCode | OpenAI-compat | `config.json` + `tui.json` + custom theme | |
@@ -81,7 +81,7 @@ project/, data/, history/  # gitignored (except .gitkeep) — real working data,
 
 ## Environment variables
 
-Full documented list lives in `.env.example` — don't let it drift from what `docker-compose.yml` actually reads. Highlights: `HARNESS_BASE_DOMAIN`, `JWT_SECRET`, `SESSION_TTL_DAYS` / `SESSION_REFRESH_DAYS` / `SESSION_SCOPE`, `IDLE_TIMEOUT_MIN`, `IDLE_EXEMPT`, `COLD_START_TIMEOUT_S`, `RETENTION_DAYS`, `SESSION_IDLE_HOURS` (closes one slug session with no tab for that long — even on an `IDLE_EXEMPT` harness), `MAX_INSTANCES_PER_HARNESS`, `TOKEN_<NAME>` (auto-filled by `auth` if blank), `FREE_FALLBACK` / `FREE_REQUIRE_TOOLS`, `FOLIO_MCP_URL` / `FOLIO_MCP_TOKEN`, `WEB_MCP_URL`, and the 6 self-hosted `MCP_*` tool servers: `MATH_MCP_URL`/`_TOKEN`, `BROWSER_MCP_URL`/`_TOKEN`, `FS_MCP_URL`/`_TOKEN`, `ML_MCP_BASE_URL`/`_TOKEN`, `DATA_MCP_BASE_URL`/`_TOKEN`, `OFFICE_MCP_BASE_URL`/`_TOKEN`.
+Full documented list lives in `.env.example` — don't let it drift from what `docker-compose.yml` actually reads. Highlights: `HARNESS_BASE_DOMAIN`, `JWT_SECRET`, `SESSION_TTL_DAYS` / `SESSION_REFRESH_DAYS` / `SESSION_SCOPE`, `IDLE_TIMEOUT_MIN`, `IDLE_EXEMPT`, `COLD_START_TIMEOUT_S`, `RETENTION_DAYS`, `SESSION_IDLE_HOURS` (closes one slug session with no tab for that long — even on an `IDLE_EXEMPT` harness), `MAX_INSTANCES_PER_HARNESS`, `TOKEN_<NAME>` (auto-filled by `auth` if blank), `FREE_FALLBACK` / `FREE_REQUIRE_TOOLS`, `OPENCODE_GO_API_KEY` / `OPENCODE_GO_CLIENTS`, `CLAUDE_MODEL` (Claude-only default model; exported as `ANTHROPIC_MODEL` by its entrypoint, so it beats a `/model` choice saved in `history/claude/settings.json` on every launch), `FOLIO_MCP_URL` / `FOLIO_MCP_TOKEN`, `WEB_MCP_URL`, and the 6 self-hosted `MCP_*` tool servers: `MATH_MCP_URL`/`_TOKEN`, `BROWSER_MCP_URL`/`_TOKEN`, `FS_MCP_URL`/`_TOKEN`, `ML_MCP_BASE_URL`/`_TOKEN`, `DATA_MCP_BASE_URL`/`_TOKEN`, `OFFICE_MCP_BASE_URL`/`_TOKEN`.
 
 ## MCP server registration pattern
 
@@ -144,6 +144,8 @@ make router-reload
 | `<harness>-<slug>` URL 429s | `MAX_INSTANCES_PER_HARNESS` reached | Let an idle slug time out, or raise the cap |
 | Container never sleeps | `IDLE_TIMEOUT_MIN=0`, or a client still holds an open websocket | Idle sweep checks for a real TCP connection, not just `/verify` timestamps |
 | Caddy cert resolution breaks for a harness subdomain | A static per-hostname block was added alongside the wildcard block | Remove it — see the gotcha above |
+| `opencode-go/<id>` answers 403 `permission_error` | The calling container isn't in `OPENCODE_GO_CLIENTS` | Expected for anything but `harness-claude`; add the container name if you really mean it |
+| `opencode-go/deepseek-v4-*` answers 403 `RegionError` | Go only hosts that version in China, behind a per-account opt-in | Opt in on your Go workspace page, or pick another model |
 | All harnesses use the same model | Intended — one provider config drives all 11 | Change the provider block in `.env`, or run a second stack for comparison |
 
 ## References
