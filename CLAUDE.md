@@ -104,6 +104,10 @@ Every MCP-capable harness (`claude`, `opencode`, `crush`, `qwencode`, `codex`, `
 - **Editing a bind-mounted single file doesn't reach the running container.** `Caddyfile`, `.env`, and `harnesses/base/ttyd-kbfix.html` are all mounted as individual files. Any edit that replaces the file (which is what the Edit/Write tools do) leaves the container bound to the old inode: `caddy reload` will keep serving the previous config and swear it's valid. Recreate/restart the container so the mount re-resolves — for the shared Caddy that means `docker compose restart caddy` in `/root/caddy-router`, not `make router-reload`.
 - **`harnesses/base/ttyd-wrapper.sh` caches its generated index at `/run/ttyd-kbfix-index.html`**, which survives `docker restart` (writable layer, not tmpfs). It now rebuilds when the snippet is newer, but that check only exists in a rebuilt base image — after editing `ttyd-kbfix.html` on a stack running an older image, `rm -f /run/ttyd-kbfix-index.html` inside the container before restarting it.
 - **Claude's harness needs >60s to boot** (its entrypoint registers ~26 MCP servers before it execs ttyd), which is why `COLD_START_TIMEOUT_S` defaults to 120. Lowering it back to 30 makes the first visit after an idle-stop 504 on a container that was coming up fine.
+- **A throwaway `claude` session inside `harness-claude` is a real session.**
+  - It writes its transcript to `history/claude/projects/-workspace/` and its prompts to `history.jsonl` (the up-arrow history).
+  - The next `main` relaunch (`--continue`, e.g. after any restart) resumes the newest transcript, so a test run can replace the operator's open conversation. This happened once, right after the operator had asked for that history to be cleaned.
+  - Run tests with `CLAUDE_CONFIG_DIR=/tmp/<scratch>` so nothing persists, or delete the test transcripts and their `history.jsonl` lines afterwards.
 - **`gitleaks` runs in CI** (`.github/workflows/ci.yml` lint job) — if a new allowlist entry in `.gitleaks.toml` is ever needed, justify it with a comment; don't blanket-disable a rule.
 
 ## Common operations
@@ -148,6 +152,7 @@ make router-reload
 | `opencode-go/<id>` answers 403 `permission_error` | The calling container isn't in `OPENCODE_GO_CLIENTS` | Expected for anything but `harness-claude`; add the container name if you really mean it |
 | `opencode-go/deepseek-v4-*` answers 403 `RegionError` | Go only hosts that version in China, behind a per-account opt-in | Opt in on your Go workspace page, or pick another model |
 | Mouse wheel doesn't scroll Claude Code's conversation (it seems to send PgUp/PgDn) | Claude Code is on its inline renderer (the default since 2.1). `ttyd-kbfix` turns the wheel into PageUp, which only the fullscreen renderer scrolls on | `harness-claude` sets `CLAUDE_CODE_NO_FLICKER=1` + `CLAUDE_CODE_DISABLE_MOUSE=1`; a container created before that needs recreating. Check with `tmux display -p -t main '#{alternate_on}'` → `1` |
+| Wheel scrolls Claude Code but also walks the prompt history | xterm.js's own wheel handler turns each notch into arrow keys on the alternate screen, on top of kbfix's PageUp | `ttyd-kbfix.html` captures the wheel on the terminal's parent and stops it. After editing that single bind-mounted file, restart the harness so ttyd rebuilds and reloads its index |
 | All harnesses use the same model | Intended — one provider config drives all 11 | Change the provider block in `.env`, or run a second stack for comparison |
 
 ## References
