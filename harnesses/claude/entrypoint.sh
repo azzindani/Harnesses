@@ -15,6 +15,19 @@ set -e
 #
 # Only the model-alias vars are touched here — BASE_URL and AUTH_TOKEN are left
 # exactly as the anchor set them (overriding those would break the proxy path).
+#
+# CLAUDE_MODEL (from .env) is this harness's own default, e.g.
+# opencode-go/muse-spark-1.3-contributor, instead of the MODEL_NAME every
+# harness shares. ANTHROPIC_MODEL outranks the model /model saves into
+# settings.json, so every launch -- the --continue relaunch after an idle stop
+# and each claude-<slug> session included -- starts on it, while /model still
+# switches for the session. Subagents follow it; background tasks (titles,
+# summaries) stay on the Haiku slot below, a free OpenRouter model.
+if [ -n "$CLAUDE_MODEL" ]; then
+    export ANTHROPIC_MODEL="$CLAUDE_MODEL"
+    export ANTHROPIC_DEFAULT_SONNET_MODEL="$CLAUDE_MODEL"
+    export CLAUDE_CODE_SUBAGENT_MODEL="$CLAUDE_MODEL"
+fi
 PRIMARY="${ANTHROPIC_DEFAULT_SONNET_MODEL:-$ANTHROPIC_DEFAULT_OPUS_MODEL}"
 CATALOG_URL="${ANTHROPIC_BASE_URL%/anthropic}/v1/models"
 IDS=$(curl -fsS --max-time 8 "$CATALOG_URL" 2>/dev/null | jq -r '.data[].id' 2>/dev/null || true)

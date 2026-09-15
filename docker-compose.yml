@@ -64,6 +64,9 @@ x-no-harness-secrets: &no-harness-secrets
   TOKEN_DROID: ""
   TOKEN_FILES: ""
   TOKEN_SWEEP: ""
+  # Spent by the auth proxy on harness-claude's behalf (opencode-go/<id>
+  # models); no harness holds it, so no agent can take the subscription along.
+  OPENCODE_GO_API_KEY: ""
 
 x-anthropic-env: &anthropic-env
   <<: *no-harness-secrets
@@ -146,6 +149,10 @@ services:
       # Seconds /verify waits for a cold-starting harness to listen — must
       # cover the slowest boot (claude registers ~26 MCP servers first).
       COLD_START_TIMEOUT_S: ${COLD_START_TIMEOUT_S:-120}
+      # Containers allowed to spend the OpenCode Go subscription through the
+      # opencode-go/<id> route; the key itself comes from env_file (see
+      # .env.example).
+      OPENCODE_GO_CLIENTS: ${OPENCODE_GO_CLIENTS:-harness-claude}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Bind-mount .env so the auth service can auto-fill empty TOKEN_*= lines
@@ -301,6 +308,10 @@ services:
       - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
       <<: *anthropic-env
+      # This harness's own default model (main session + subagents), e.g.
+      # opencode-go/muse-spark-1.3-contributor; the entrypoint applies it.
+      # Unset, Claude uses MODEL_NAME like every other harness.
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-}
 
   harness-aider:
     <<: *harness-defaults
