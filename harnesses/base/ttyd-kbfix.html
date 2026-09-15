@@ -452,16 +452,31 @@
       }
 
       /* One PageUp/PageDown per wheel notch, throttled so a fast trackpad
-         flick (which fires many wheel events) doesn't fire a burst of jumps. */
+         flick (which fires many wheel events) doesn't fire a burst of jumps.
+
+         Captured on the terminal's PARENT and stopped there, so xterm.js
+         never sees the event. xterm.js has its own wheel listener on
+         term.element, and on a buffer with no scrollback -- the alternate
+         screen, where tmux always keeps it -- it turns each notch into
+         Up/Down ARROW keys for the app. Both fired: PageUp from here scrolled
+         Claude Code's transcript while xterm's arrows walked its prompt
+         history. A second listener on the same element cannot stop the
+         first one (preventDefault doesn't; stopPropagation doesn't), but an
+         ancestor's capture-phase listener runs before either and can end
+         the event. The normal buffer is untouched, and its events go on to
+         xterm's own scrollback. */
       var wheelBusy = false;
-      scrollEl.addEventListener('wheel', function (e) {
+      var wheelHost = (term.element && term.element.parentElement) || document;
+      wheelHost.addEventListener('wheel', function (e) {
         if (!inAltScreen()) return;
+        if (term.element && !term.element.contains(e.target)) return;
         e.preventDefault();
-        if (wheelBusy) return;
+        e.stopPropagation();
+        if (wheelBusy || !e.deltaY) return;
         wheelBusy = true;
         scrollStep(e.deltaY < 0);
         setTimeout(function () { wheelBusy = false; }, 150);
-      }, { passive: false });
+      }, { capture: true, passive: false });
 
       /* Touch-drag -> one PageUp/PageDown per ~120px of movement. "Natural"
          direction: dragging down reveals earlier content (PageUp), matching
