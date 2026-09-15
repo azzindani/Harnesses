@@ -158,6 +158,8 @@ _mcp_register() {  # name url token(optional)
 }
 
 [ -n "$FOLIO_MCP_URL" ] && [ -n "$FOLIO_MCP_TOKEN" ] && _mcp_register folio "$FOLIO_MCP_URL" "$FOLIO_MCP_TOKEN"
+# Pipeline (/root/Pipeline, Rust) — one endpoint, bearer = its PIPELINE_TOKEN.
+[ -n "$PIPELINE_MCP_URL" ] && [ -n "$PIPELINE_MCP_TOKEN" ] && _mcp_register pipeline "$PIPELINE_MCP_URL" "$PIPELINE_MCP_TOKEN"
 # Web search/fetch (DuckDuckGo sidecar) — no auth header.
 [ -n "$WEB_MCP_URL" ] && _mcp_register web "$WEB_MCP_URL"
 
