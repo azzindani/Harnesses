@@ -147,6 +147,7 @@ make router-reload
 | Caddy cert resolution breaks for a harness subdomain | A static per-hostname block was added alongside the wildcard block | Remove it — see the gotcha above |
 | `opencode-go/<id>` answers 403 `permission_error` | The calling container isn't in `OPENCODE_GO_CLIENTS` | Expected for anything but `harness-claude`; add the container name if you really mean it |
 | `opencode-go/deepseek-v4-*` answers 403 `RegionError` | Go only hosts that version in China, behind a per-account opt-in | Opt in on your Go workspace page, or pick another model |
+| Mouse wheel doesn't scroll Claude Code's conversation (it seems to send PgUp/PgDn) | Claude Code is on its inline renderer (the default since 2.1). `ttyd-kbfix` turns the wheel into PageUp, which only the fullscreen renderer scrolls on | `harness-claude` sets `CLAUDE_CODE_NO_FLICKER=1` + `CLAUDE_CODE_DISABLE_MOUSE=1`; a container created before that needs recreating. Check with `tmux display -p -t main '#{alternate_on}'` → `1` |
 | All harnesses use the same model | Intended — one provider config drives all 11 | Change the provider block in `.env`, or run a second stack for comparison |
 
 ## References
