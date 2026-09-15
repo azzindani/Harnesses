@@ -1764,7 +1764,17 @@ def _anthropic_to_responses_request(payload: dict) -> dict:
     # than a silent stream. Muse Spark and Grok send them; GPT sends none but
     # accepts the field.
     out["reasoning"] = {"summary": "auto"}
+    # Claude Code's effort (/effort, or effortLevel in settings) arrives as
+    # output_config.effort. It is the same knob as opencode's variant picker;
+    # models.dev lists minimal..xhigh for Muse Spark. Claude Code has no
+    # minimal, and its max maps to Go's top level, xhigh.
+    effort = _GO_EFFORT.get((payload.get("output_config") or {}).get("effort"))
+    if effort:
+        out["reasoning"]["effort"] = effort
     return out
+
+
+_GO_EFFORT = {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "xhigh"}
 
 
 def _responses_stop_reason(response: dict, used_tool: bool) -> str:
@@ -1968,6 +1978,17 @@ def _upstream_error(err) -> tuple[int, str, str]:
 # check your network", and it gives up after 5 minutes. Anthropic's own API
 # sends `ping` events while a stream is quiet; this proxy does too.
 _KEEPALIVE_S = 10.0
+
+# While a model thinks, Go streams reasoning summaries every few seconds (the
+# longest gap seen was 17s), so a stream with no bytes for this long has hung.
+# One did: 300s of silence, then the client's read timeout. Cutting it sooner
+# lets Claude Code retry sooner. A non-streaming request keeps the full 300s,
+# because it sends nothing until it is done.
+_GO_STREAM_READ_TIMEOUT_S = 120.0
+
+
+def _go_timeout(streaming: bool) -> httpx.Timeout:
+    return httpx.Timeout(300.0, read=_GO_STREAM_READ_TIMEOUT_S if streaming else 300.0)
 _PING = b'event: ping\ndata: {"type": "ping"}\n\n'
 
 
@@ -2028,6 +2049,13 @@ async def _send_translated(upstream_request: httpx.Request, streaming: bool,
             try:
                 async for chunk in _with_keepalive(translate_stream(upstream)):
                     yield chunk
+            except httpx.HTTPError as e:
+                # A hung or dropped upstream: end the stream with an error that
+                # Claude Code retries, rather than cutting the connection.
+                log.warning("upstream stream broke (%s): %s", type(e).__name__, e)
+                yield ("event: error\ndata: " + json.dumps({"type": "error", "error": {
+                    "type": "overloaded_error",
+                    "message": f"upstream stream broke ({type(e).__name__}); retrying"}}) + "\n\n").encode()
             finally:
                 await upstream.aclose()
 
@@ -2112,6 +2140,7 @@ async def _proxy_opencode_go(request: Request, payload: dict, model: str,
             _PROXY_CLIENT.build_request(
                 "POST", f"{OPENCODE_GO_URL}/responses",
                 json=_anthropic_to_responses_request(payload), headers=headers,
+                timeout=_go_timeout(streaming),
             ),
             streaming,
             lambda upstream: _translate_responses_stream(upstream, model, msg_id),
@@ -2123,6 +2152,7 @@ async def _proxy_opencode_go(request: Request, payload: dict, model: str,
     return await _send_translated(
         _PROXY_CLIENT.build_request(
             "POST", f"{OPENCODE_GO_URL}/chat/completions", json=openai_body, headers=headers,
+            timeout=_go_timeout(streaming),
         ),
         streaming,
         lambda upstream: _translate_stream(upstream, model, msg_id),
