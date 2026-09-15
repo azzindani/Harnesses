@@ -308,11 +308,15 @@ services:
       - ./harnesses/base/ttyd-kbfix.html:/opt/ttyd-kbfix.html:ro
     environment:
       <<: *anthropic-env
-      # This harness's own default model (main session + subagents), e.g.
-      # opencode-go/muse-spark-1.3-contributor[1m] ([1m] = 1M context window);
-      # the entrypoint applies it.
-      # Unset, Claude uses MODEL_NAME like every other harness.
+      # This harness's own default model, e.g.
+      # opencode-go/muse-spark-1.3-contributor[1m] ([1m] = 1M context window).
+      # The entrypoint gives it to every model slot: main session, subagents,
+      # Opus and Haiku. Unset, Claude uses MODEL_NAME like every other harness.
       CLAUDE_MODEL: ${CLAUDE_MODEL:-}
+      # Claude Code caps a built-in Explore subagent at the Opus slot whenever
+      # the main model isn't a Claude model. Off, Explore inherits whatever the
+      # session is on, including a model picked with /model.
+      CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP: "1"
       # Fullscreen renderer, without mouse capture. Since Claude Code 2.1 the
       # default renderer is inline: the conversation goes into tmux's pane
       # history, which the browser cannot wheel through (tmux mouse is off so

@@ -21,8 +21,8 @@ set -e
 # harness shares. ANTHROPIC_MODEL outranks the model /model saves into
 # settings.json, so every launch -- the --continue relaunch after an idle stop
 # and each claude-<slug> session included -- starts on it, while /model still
-# switches for the session. Subagents follow it; background tasks (titles,
-# summaries) stay on the Haiku slot below, a free OpenRouter model.
+# switches for the session. Subagents follow it, and so do the Opus and Haiku
+# slots below, so nothing in a session falls back to a free OpenRouter model.
 if [ -n "$CLAUDE_MODEL" ]; then
     export ANTHROPIC_MODEL="$CLAUDE_MODEL"
     export ANTHROPIC_DEFAULT_SONNET_MODEL="$CLAUDE_MODEL"
@@ -42,8 +42,19 @@ M4=$(printf '%s\n' "$PICK" | sed -n 4p)
 # Sonnet (= Default) keeps the configured primary; the others get distinct free
 # models when available, falling back to the primary if the catalog is short.
 export ANTHROPIC_DEFAULT_SONNET_MODEL="$M1"
-export ANTHROPIC_DEFAULT_OPUS_MODEL="${M2:-$M1}"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="${M3:-$M1}"
+if [ -n "$CLAUDE_MODEL" ]; then
+    # CLAUDE_MODEL fills these too. Claude Code runs session titles and
+    # WebFetch summaries on Haiku, and caps a built-in Explore subagent at
+    # Opus whenever the main model isn't a Claude model. On free OpenRouter
+    # models those calls hung for minutes (a 504 after 3 minutes), and the
+    # session waited on them behind "will retry in 4m". The bare id, because
+    # the proxy doesn't strip [1m].
+    export ANTHROPIC_DEFAULT_OPUS_MODEL="${CLAUDE_MODEL%\[1m\]}"
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL="${CLAUDE_MODEL%\[1m\]}"
+else
+    export ANTHROPIC_DEFAULT_OPUS_MODEL="${M2:-$M1}"
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL="${M3:-$M1}"
+fi
 export ANTHROPIC_CUSTOM_MODEL_OPTION="${M4:-${M2:-$M1}}"
 
 # Gateway model discovery: Claude Code queries ${ANTHROPIC_BASE_URL}/v1/models at
