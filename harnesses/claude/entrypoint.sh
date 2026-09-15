@@ -58,38 +58,33 @@ echo "  Haiku            = $ANTHROPIC_DEFAULT_HAIKU_MODEL"
 echo "  Custom           = $ANTHROPIC_CUSTOM_MODEL_OPTION"
 echo "  (type '/model <id>' to pick any other free model from the catalog)"
 
-# ── Register external MCP servers (Folio + web search) ────────────────────────
+# ── Register MCP servers ─────────────────────────────────────────────────────
 # Containers are ephemeral, so MCP servers are (re)registered at every boot from
-# env vars rather than baked into a persisted config.  FOLIO_MCP_* / WEB_MCP_URL
-# come from the shared .env via the compose env_file.  Registered at user scope
-# so the servers are available in every /workspace session.
-if [ -n "$FOLIO_MCP_URL" ] && [ -n "$FOLIO_MCP_TOKEN" ]; then
-    claude mcp remove --scope user folio >/dev/null 2>&1 || true
-    if claude mcp add --scope user --transport http folio "$FOLIO_MCP_URL" \
-        --header "Authorization: Bearer $FOLIO_MCP_TOKEN" >/dev/null 2>&1; then
-        echo "MCP: registered 'folio' -> $FOLIO_MCP_URL"
-    else
-        echo "MCP: WARNING failed to register 'folio'"
-    fi
-fi
-# Web search/fetch (DuckDuckGo sidecar) — no auth header.
-if [ -n "$WEB_MCP_URL" ]; then
-    claude mcp remove --scope user web >/dev/null 2>&1 || true
-    if claude mcp add --scope user --transport http web "$WEB_MCP_URL" >/dev/null 2>&1; then
-        echo "MCP: registered 'web' -> $WEB_MCP_URL"
-    else
-        echo "MCP: WARNING failed to register 'web'"
-    fi
-fi
+# env vars rather than baked into a persisted config.  The *_MCP_* vars come
+# from the shared .env via the compose env_file.  Registered at user scope so
+# the servers are available in every /workspace session.
+#
+# MCP_DISABLED (from .env) drops servers exactly as the opencode harness does:
+# a whole entry name ("browser", "office-xlsx-new") or a repo prefix ("office"
+# drops all eleven), so the two personal harnesses see the same set.  Every
+# tool a server exposes is context spent on every request -- on OpenCode Go,
+# quota.  A dropped server is also removed: a container that was restarted
+# rather than recreated still has the last boot's registrations in
+# ~/.claude.json.
+_mcp_disabled() {  # name -> true when MCP_DISABLED lists it or its repo prefix
+    case ",$(printf '%s' "$MCP_DISABLED" | tr -d ' ' | tr 'A-Z' 'a-z')," in
+        *",$1,"*|*",${1%%-*},"*) return 0 ;;
+    esac
+    return 1
+}
 
-# ── Register the 6 self-hosted MCP_* tool servers ──────────────────────────
-# Same pattern as folio/web above. Single-endpoint repos (math/browser/
-# filesystem) register directly; the sub-mounted repos (ml/data/office) have
-# no single unified endpoint, so each sub-server under <BASE>/<name>/mcp is
-# registered as its own named server ("ml-basic", "data-workspace", etc).
 _mcp_register() {  # name url token(optional)
     name="$1"; url="$2"; token="$3"
     claude mcp remove --scope user "$name" >/dev/null 2>&1 || true
+    if _mcp_disabled "$name"; then
+        echo "MCP: skipped '$name' (MCP_DISABLED)"
+        return 0
+    fi
     if [ -n "$token" ]; then
         if claude mcp add --scope user --transport http "$name" "$url" \
             --header "Authorization: Bearer $token" >/dev/null 2>&1; then
@@ -106,6 +101,14 @@ _mcp_register() {  # name url token(optional)
     fi
 }
 
+[ -n "$FOLIO_MCP_URL" ] && [ -n "$FOLIO_MCP_TOKEN" ] && _mcp_register folio "$FOLIO_MCP_URL" "$FOLIO_MCP_TOKEN"
+# Web search/fetch (DuckDuckGo sidecar) — no auth header.
+[ -n "$WEB_MCP_URL" ] && _mcp_register web "$WEB_MCP_URL"
+
+# The self-hosted MCP_* servers. Single-endpoint repos (math/browser/
+# filesystem) register directly; the sub-mounted repos (ml/data/office/docs)
+# have no single unified endpoint, so each sub-server under <BASE>/<name>/mcp
+# is registered as its own named server ("ml-basic", "data-workspace", etc).
 [ -n "$MATH_MCP_URL" ] && [ -n "$MATH_MCP_TOKEN" ] && _mcp_register math "$MATH_MCP_URL" "$MATH_MCP_TOKEN"
 [ -n "$BROWSER_MCP_URL" ] && [ -n "$BROWSER_MCP_TOKEN" ] && _mcp_register browser "$BROWSER_MCP_URL" "$BROWSER_MCP_TOKEN"
 [ -n "$FS_MCP_URL" ] && [ -n "$FS_MCP_TOKEN" ] && _mcp_register filesystem "$FS_MCP_URL" "$FS_MCP_TOKEN"

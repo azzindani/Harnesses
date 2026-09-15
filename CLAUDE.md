@@ -91,6 +91,7 @@ Every MCP-capable harness (`claude`, `opencode`, `crush`, `qwencode`, `codex`, `
 - **Sub-mounted repos** (`ml`, `data`, `office`) have no single unified endpoint — `MCP_Machine_Learning`, `MCP_Data_Analyst`, and `MCP_Microsoft_Office` each mount several sub-servers at `<BASE_URL>/<sub-server>/mcp`. Their harness var is the BASE url (no `/mcp` suffix); each entrypoint loops over the known sub-server names and registers every one individually as `<repo>-<sub-server>` (e.g. `ml-basic`, `data-workspace`, `office-pptx-design`).
 - Adding a 7th self-hosted repo (or a new sub-server to an existing one): add its `..._URL`/`..._TOKEN` pair to `.env.example` + `.env`, then extend the registration block in all 8 `harnesses/<name>/entrypoint.sh` files — there is no single shared helper, each harness's native config format needs its own block, so keep them all in sync by hand.
 - This is a lot of tools per harness by design (up to 26 servers / ~225 tools when every repo is configured) — small/free local models may struggle with tool-call reliability at that scale (see the troubleshooting table). Leaving a repo's `..._TOKEN` blank fully disables its registrations with no other changes needed.
+- `MCP_DISABLED` (comma-separated entry names or repo prefixes, e.g. `office` for all 11) hides servers while keeping their URL/token in `.env`. Only `opencode` and `claude` honor it, from the same `.env` line, so the two daily harnesses register the same set; `harness-sweep` reads `SWEEP_MCP_DISABLED` instead.
 
 ## Gotchas for anyone (agent or human) working in this repo
 
