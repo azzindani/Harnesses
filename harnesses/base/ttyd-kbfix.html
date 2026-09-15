@@ -61,6 +61,19 @@
       (sessionStorage) so a genuinely dead backend can't put the tab in a
       reload loop; hidden tabs never reload, and their clock only starts once
       the tab is visible again.
+  11. Key sizing — ttyd's page has no viewport meta tag, so a phone lays it
+      out about 980 CSS px wide and shrinks it onto the screen: the toolbar
+      keys came out 15x14px on a 390px-wide phone. They are sized in
+      `--lab-u` (CSS px per screen px) instead, about 32px tall on any phone.
+      The 📋 button and its panel (#6) keep their CSS sizes.
+  12. Keyboard awareness — iOS Safari, and Android Chrome by default, shrink
+      only the *visual* viewport when the on-screen keyboard opens, so the
+      fixed key toolbar and the terminal's bottom rows (the prompt) sat behind
+      the keyboard. On every visualViewport resize/scroll the toolbar is pinned
+      just above the keyboard and the terminal is resized to the space above
+      the toolbar, so ttyd refits it and the prompt stays in view. With the
+      keyboard closed the same layout stops the toolbar covering the
+      terminal's last rows.
 */
 (function () {
   function decodeUtf8(s) { try { return decodeURIComponent(escape(s)); } catch (e) { return s; } }
@@ -254,6 +267,21 @@
         installed.push('links');
       }
     } catch (e) {}
+
+    /* 11. Touch sizing unit -- see header comment. */
+    var unit = 1;
+    function updateUnit() {
+      try {
+        var landscape = window.matchMedia && window.matchMedia('(orientation: landscape)').matches;
+        var sw = landscape ? Math.max(screen.width, screen.height) : Math.min(screen.width, screen.height);
+        var lw = document.documentElement.clientWidth || window.innerWidth;
+        unit = Math.min(4, Math.max(1, sw ? lw / sw : 1));
+        document.documentElement.style.setProperty('--lab-u', unit + 'px');
+      } catch (e) {}
+    }
+    updateUnit();
+    window.addEventListener('resize', updateUnit);
+    window.addEventListener('orientationchange', function () { setTimeout(updateUnit, 300); });
 
     /* 6. Mobile panel — floating 📋 button + output / URL panel.
        Only injected on touch-capable devices so desktop layout is untouched.
@@ -521,19 +549,20 @@
         var kbStyle = document.createElement('style');
         kbStyle.textContent =
           '#lab-keys-wrap{position:fixed;left:0;right:0;bottom:0;z-index:9998;}' +
-          '#lab-keys{display:flex;gap:4px;overflow-x:auto;-webkit-overflow-scrolling:touch;' +
-            'padding:6px 8px;background:rgba(18,18,18,0.95);' +
+          '#lab-keys{display:flex;gap:calc(4*var(--lab-u,1px));overflow-x:auto;-webkit-overflow-scrolling:touch;' +
+            'padding:calc(4*var(--lab-u,1px)) calc(6*var(--lab-u,1px));background:rgba(18,18,18,0.95);' +
             'border-top:1px solid rgba(255,255,255,0.15);}' +
           /* Fade + chevron on the right edge hints there are more keys to
              scroll to (Ctrl/Alt/Shift/Home/End/Esc/Tab don't fit on one
              screen alongside the higher-priority arrows/paging keys). */
-          '#lab-keys-hint{position:absolute;top:0;right:0;bottom:0;width:28px;' +
+          '#lab-keys-hint{position:absolute;top:0;right:0;bottom:0;width:calc(26*var(--lab-u,1px));' +
             'pointer-events:none;display:flex;align-items:center;justify-content:flex-end;' +
-            'padding-right:2px;color:rgba(255,255,255,0.55);font-size:11px;' +
+            'padding-right:calc(2*var(--lab-u,1px));color:rgba(255,255,255,0.55);font-size:calc(15*var(--lab-u,1px));' +
             'background:linear-gradient(to right, rgba(18,18,18,0), rgba(18,18,18,0.95) 55%);}' +
-          '#lab-keys button{flex:0 0 auto;min-width:38px;padding:7px 9px;' +
-            'border:1px solid rgba(255,255,255,0.22);border-radius:6px;' +
-            'background:#2a2a2a;color:#ddd;font-size:13px;font-family:monospace;' +
+          '#lab-keys button{flex:0 0 auto;min-width:calc(38*var(--lab-u,1px));min-height:calc(32*var(--lab-u,1px));' +
+            'padding:0 calc(9*var(--lab-u,1px));' +
+            'border:1px solid rgba(255,255,255,0.22);border-radius:calc(6*var(--lab-u,1px));' +
+            'background:#2a2a2a;color:#ddd;font-size:calc(14*var(--lab-u,1px));font-family:monospace;' +
             'cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;}' +
           '#lab-keys button.lab-key-active{background:#0e639c;color:#fff;border-color:#0e639c;}';
         document.head.appendChild(kbStyle);
@@ -599,6 +628,62 @@
         updateHint();
 
         installed.push('key-toolbar');
+      }
+    } catch (e) {}
+
+    /* 12. Keyboard awareness (touch devices only) -- see header comment. */
+    try {
+      if (navigator.maxTouchPoints > 0 || ('ontouchstart' in window)) {
+        var keysWrap = document.getElementById('lab-keys-wrap');
+        var termBox = document.getElementById('terminal-container') ||
+                      (term.element && term.element.parentElement);
+        var lastTermH = -1, layoutQueued = false;
+
+        function layoutAboveKeyboard() {
+          layoutQueued = false;
+          var vv = window.visualViewport;
+          var viewH = vv ? vv.height : window.innerHeight;
+          var viewTop = vv ? vv.offsetTop : 0;
+          var barH = keysWrap ? keysWrap.offsetHeight : 0;
+          if (keysWrap) {
+            keysWrap.style.bottom = 'auto';
+            keysWrap.style.top = Math.round(viewTop + viewH - barH) + 'px';
+          }
+          var fabEl = document.getElementById('lab-fab');
+          if (fabEl) {
+            fabEl.style.bottom = 'auto';
+            fabEl.style.top = Math.round(viewTop + viewH - barH - fabEl.offsetHeight - 16) + 'px';
+          }
+          if (termBox) {
+            /* Fixed to the visual viewport's top, so a page iOS scrolled to
+               reveal the focused input doesn't push the terminal's top out. */
+            termBox.style.position = 'fixed';
+            termBox.style.left = '0';
+            termBox.style.right = '0';
+            termBox.style.top = Math.round(viewTop) + 'px';
+            var termH = Math.max(80, Math.round(viewH - barH));
+            if (termH !== lastTermH) {
+              lastTermH = termH;
+              termBox.style.height = termH + 'px';
+              /* ttyd refits xterm on window resize; the height check above
+                 keeps this event from looping back into another layout. */
+              window.dispatchEvent(new Event('resize'));
+            }
+          }
+        }
+        function queueLayout() {
+          if (layoutQueued) return;
+          layoutQueued = true;
+          requestAnimationFrame(layoutAboveKeyboard);
+        }
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener('resize', queueLayout);
+          window.visualViewport.addEventListener('scroll', queueLayout);
+        }
+        window.addEventListener('resize', queueLayout);
+        window.addEventListener('orientationchange', function () { setTimeout(queueLayout, 300); });
+        layoutAboveKeyboard();
+        installed.push('keyboard-aware');
       }
     } catch (e) {}
 
