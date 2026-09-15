@@ -209,7 +209,7 @@ See `.env.example` for the full, commented list. Highlights beyond the provider 
 | `TOKEN_<NAME>` | per-harness JWT (auto-filled by the auth service if left blank) |
 | `FREE_FALLBACK` / `FREE_REQUIRE_TOOLS` | OpenRouter free-model catalog/fallback behavior |
 | `OPENCODE_GO_API_KEY` / `OPENCODE_GO_CLIENTS` | optional OpenCode Go subscription as a second provider for Claude Code: `opencode-go/<id>` models in `/model` go to Go, the rest stay on OpenRouter; only the listed containers (default `harness-claude`) may use it |
-| `CLAUDE_MODEL` | the Claude harness's own default model (main session + subagents), e.g. `opencode-go/muse-spark-1.3-contributor[1m]`; `[1m]` tells Claude Code the model has a 1M context window (it assumes 200k for ids it doesn't know). Each launch starts on it; `/model` still switches per session. Blank = `MODEL_NAME` |
+| `CLAUDE_MODEL` | the Claude harness's own default model for every model slot (main session, subagents, and the Opus/Haiku slots behind titles, WebFetch and Explore), e.g. `opencode-go/muse-spark-1.3-contributor[1m]`; `[1m]` tells Claude Code the model has a 1M context window (it assumes 200k for ids it doesn't know). Each launch starts on it; `/model` still switches per session. Blank = `MODEL_NAME` |
 | `FOLIO_MCP_URL` / `FOLIO_MCP_TOKEN` | optional external Folio MCP server |
 | `WEB_MCP_URL` | the bundled web-search MCP sidecar (on by default, no key) |
 | `MATH_MCP_URL` / `..._TOKEN` | optional MCP_Math server |

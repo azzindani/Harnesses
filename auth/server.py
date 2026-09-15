@@ -1759,6 +1759,11 @@ def _anthropic_to_responses_request(payload: dict) -> dict:
         out["max_output_tokens"] = max(int(payload["max_tokens"]), 16)
     if payload.get("stream"):
         out["stream"] = True
+    # Stream the model's reasoning summaries; _translate_responses_stream turns
+    # them into thinking blocks, so a long think shows up as progress rather
+    # than a silent stream. Muse Spark and Grok send them; GPT sends none but
+    # accepts the field.
+    out["reasoning"] = {"summary": "auto"}
     return out
 
 
@@ -1806,8 +1811,8 @@ async def _translate_responses_stream(upstream: httpx.Response, model: str, msg_
     (`response.output_item.added`), filled (`…output_text.delta`,
     `…function_call_arguments.delta`) and closed (`response.output_item.done`).
     So each text message or function call becomes one Anthropic content block,
-    keyed on the item's `output_index`; reasoning items are dropped, as the
-    chat path drops reasoning.
+    keyed on the item's `output_index`; a reasoning item's summary becomes a
+    thinking block, one per item, its parts separated by a blank line.
     """
 
     def sse(event: str, data: dict) -> bytes:
@@ -1815,6 +1820,7 @@ async def _translate_responses_stream(upstream: httpx.Response, model: str, msg_
 
     blocks: dict[int, int] = {}      # output_index → Anthropic block index
     args_streamed: set[int] = set()
+    thinking_part: dict[int, int] = {}   # output_index → last summary_index
     next_block_index = 0
     used_tool = False
     final: dict = {}
@@ -1850,6 +1856,25 @@ async def _translate_responses_stream(upstream: httpx.Response, model: str, msg_
                     "content_block": {"type": "tool_use", "id": item.get("call_id"),
                                       "name": item.get("name", ""), "input": {}},
                 })
+        elif etype == "response.reasoning_summary_text.delta":
+            if oi not in blocks:
+                blocks[oi] = next_block_index
+                next_block_index += 1
+                yield sse("content_block_start", {
+                    "type": "content_block_start",
+                    "index": blocks[oi],
+                    "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+                })
+            text = ev.get("delta", "")
+            part = ev.get("summary_index", 0)
+            if thinking_part.setdefault(oi, part) != part:
+                thinking_part[oi] = part
+                text = "\n\n" + text
+            yield sse("content_block_delta", {
+                "type": "content_block_delta",
+                "index": blocks[oi],
+                "delta": {"type": "thinking_delta", "thinking": text},
+            })
         elif etype == "response.output_text.delta":
             if oi not in blocks:
                 blocks[oi] = next_block_index
@@ -1938,6 +1963,54 @@ def _upstream_error(err) -> tuple[int, str, str]:
     return status, _ANTHROPIC_ERROR_TYPES.get(status, "api_error"), str(err.get("message") or "upstream error")
 
 
+# A reasoning model can think for a minute or more before its first word. On a
+# quiet stream Claude Code shows "Waiting for API response · will retry in 4m ·
+# check your network", and it gives up after 5 minutes. Anthropic's own API
+# sends `ping` events while a stream is quiet; this proxy does too.
+_KEEPALIVE_S = 10.0
+_PING = b'event: ping\ndata: {"type": "ping"}\n\n'
+
+
+async def _with_keepalive(chunks, interval: float = _KEEPALIVE_S):
+    """Relay `chunks`, adding a ping whenever none arrives for `interval`
+    seconds.  Pings start after the first chunk, so message_start stays first.
+    A pump task does the reading, because timing out a read directly would
+    cancel it partway through a chunk."""
+    queue: asyncio.Queue = asyncio.Queue()
+    end = object()
+
+    async def pump():
+        try:
+            async for chunk in chunks:
+                await queue.put(chunk)
+        except Exception as e:
+            await queue.put(e)
+        else:
+            await queue.put(end)
+
+    task = asyncio.create_task(pump())
+    started = False
+    try:
+        while True:
+            try:
+                item = await (asyncio.wait_for(queue.get(), interval) if started else queue.get())
+            except TimeoutError:
+                yield _PING
+                continue
+            if item is end:
+                return
+            if isinstance(item, Exception):
+                raise item
+            started = True
+            yield item
+    finally:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+
 async def _send_translated(upstream_request: httpx.Request, streaming: bool,
                            translate_stream, translate_response) -> Response:
     """Send a translated request and translate the reply back to Anthropic
@@ -1953,7 +2026,7 @@ async def _send_translated(upstream_request: httpx.Request, streaming: bool,
 
         async def gen():
             try:
-                async for chunk in translate_stream(upstream):
+                async for chunk in _with_keepalive(translate_stream(upstream)):
                     yield chunk
             finally:
                 await upstream.aclose()
