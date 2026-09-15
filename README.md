@@ -56,7 +56,7 @@ Shared Caddy reverse proxy (external to this repo, owns TLS/ports 80+443)
                                           the actual CLI (claude / aider / opencode / …)
 ```
 
-Always-on: the shared Caddy router + `harnesses-auth`. Everything else (the 11 harness containers, `plandex-server`+`plandex-postgres`, `web-mcp`) starts on demand and stops after `IDLE_TIMEOUT_MIN` minutes of no connected client — the sleep takes the tmux session with it, but `claude` and `opencode` relaunch with `--continue`, so waking returns you to the conversation rather than a blank prompt.
+Always-on: the shared Caddy router + `harnesses-auth`. Everything else (the 11 harness containers, `plandex-server`+`plandex-postgres`, `web-mcp`) starts on demand and stops after `IDLE_TIMEOUT_MIN` minutes with no connected client and no model request of its own — the sleep takes the tmux session with it, but `claude` and `opencode` relaunch with `--continue`, so waking returns you to the conversation rather than a blank prompt.
 
 ## Harnesses
 
@@ -142,7 +142,7 @@ Visiting `https://<harness>-<slug>.lab.example.com/?token=<jwt>` (any existing t
 - Each slug's session and port are stable across reconnects; visiting the same slug again reattaches to the same tmux window.
 - A session nobody has had a tab open on for `SESSION_IDLE_HOURS` (default `24`) is closed on its own — its CLI process and its `ttyd` — while `main` and every other session keep running, even on an `IDLE_EXEMPT` harness. Each slug is a whole CLI (~1GB for opencode), and idle-stop (below) can't reclaim one while anything else in the container is in use. Visiting the URL again starts it fresh; the conversation is still in `history/`.
 - `/pin` and `/unpin` (e.g. `https://claude-blog.lab.example.com/pin`) exempt a session from that and from the `RETENTION_DAYS` auto-cleanup sweep.
-- Because every session of one harness type shares that one container, idle-stop is all-or-nothing: the container only stops once *every* session on it (base and every slug) has had no connected client for `IDLE_TIMEOUT_MIN`. A dynamic session's tmux window doesn't survive a container stop — it's recreated fresh the next time that slug is visited (the CLI's own conversation history, where a harness persists one, is unaffected — only the terminal window itself is momentarily gone).
+- Because every session of one harness type shares that one container, idle-stop is all-or-nothing: the container only stops once *every* session on it (base and every slug) has had no connected client, and the harness has made no model request, for `IDLE_TIMEOUT_MIN`. A dynamic session's tmux window doesn't survive a container stop — it's recreated fresh the next time that slug is visited (the CLI's own conversation history, where a harness persists one, is unaffected — only the terminal window itself is momentarily gone).
 
 ## File management
 
@@ -200,7 +200,7 @@ See `.env.example` for the full, commented list. Highlights beyond the provider 
 | `JWT_SECRET` | signs every per-harness token; rotating it invalidates all of them instantly |
 | `SESSION_TTL_DAYS` / `SESSION_REFRESH_DAYS` | lifetime of the browser session minted at login, and how much of it must remain before it is slid forward |
 | `SESSION_SCOPE` | `all` (default) → one login covers every subdomain incl. `files`; `harness` → per-harness pinning |
-| `IDLE_TIMEOUT_MIN` | minutes of no connected client before a container is stopped (`0` disables) |
+| `IDLE_TIMEOUT_MIN` | minutes with no connected client and no model request from the harness before its container is stopped (`0` disables). A stop restarts every session in it, and slug sessions come back blank, so raise it (`720` = 12h) if you leave them unattended |
 | `IDLE_EXEMPT` | harness types the idle sweep never stops, e.g. `claude,opencode` — empty by default, since waking now resumes the conversation anyway |
 | `COLD_START_TIMEOUT_S` | seconds `/verify` waits for a cold-starting harness before returning 504 (claude needs >60s to register its MCP servers) |
 | `RETENTION_DAYS` | days of inactivity before an unpinned dynamic session is torn down |
@@ -259,7 +259,7 @@ docker compose up -d --force-recreate harness-<name>
 | Waking a slept harness takes ~a minute | Its entrypoint re-registers every MCP server before ttyd listens | Expected; raise `COLD_START_TIMEOUT_S` if you add more servers, or trim the `MCP_*` vars you don't use |
 | First visit after a long break 504s | Harness slower to boot than `COLD_START_TIMEOUT_S` | Raise it — claude needs >60s just to register its MCP servers |
 | A `<harness>-<slug>` URL 429s | `MAX_INSTANCES_PER_HARNESS` reached for that type | Let an idle slug time out, or raise the cap |
-| Container never sleeps | `IDLE_TIMEOUT_MIN=0`, or a client still holds an open websocket | Check the value; the idle sweep reads `/proc/net/tcp` for a real connection, not just `/verify` timestamps |
+| Container never sleeps | `IDLE_TIMEOUT_MIN=0`, a client still holds an open websocket, or an agent in it is still calling a model | Check the value; the idle sweep reads `/proc/net/tcp` for a real connection, not just `/verify` timestamps, and a model request through the proxy counts as use too |
 | All harnesses use the same model | Intended — one provider config drives all 11 | Change `MODEL_NAME`/provider in `.env`, or run a second stack for comparison |
 
 ## Project layout
