@@ -248,8 +248,13 @@ tmux new-session -d -s main -c /workspace
 # Deliberately NOT applied to dynamic <harness>-<slug> sessions (see
 # HARNESS_LAUNCH_CMD in auth/server.py): they share this one /workspace, so
 # resuming would point every parallel slug at the SAME conversation.
-tmux send-keys -t main \
-    "claude --continue --dangerously-skip-permissions || claude --dangerously-skip-permissions" Enter
+# Written to a file, not just sent: the auth service re-sends this exact line
+# when a tab reconnects and `main` is gone (_ensure_base_session in
+# auth/server.py), so quitting the CLI no longer leaves a terminal that can
+# only fail to attach.
+printf '%s\n' "claude --continue --dangerously-skip-permissions || claude --dangerously-skip-permissions" \
+    > /run/main-launch
+tmux send-keys -t main "$(cat /run/main-launch)" Enter
 
 # The Bypass Permissions warning can't be pre-accepted via config (the config
 # flags are ignored), so auto-confirm it once the dialog renders — this is a

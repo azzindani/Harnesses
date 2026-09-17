@@ -252,7 +252,14 @@ fi
 # first-ever boot, when there's no last session to continue. Deliberately NOT
 # applied to dynamic <harness>-<slug> sessions -- see the same note in
 # harnesses/claude/entrypoint.sh.
-tmux send-keys -t main "opencode --model '$OC_MODEL' --continue || opencode --model '$OC_MODEL'" Enter
+#
+# Written to a file, not just sent: the auth service re-sends this exact line
+# when a tab reconnects and `main` is gone -- because the CLI was quit, or
+# because _close_idle_main stopped it to give its ~0.9GB back (see
+# _ensure_base_session in auth/server.py).
+printf "opencode --model '%s' --continue || opencode --model '%s'\n" "$OC_MODEL" "$OC_MODEL" \
+    > /run/main-launch
+tmux send-keys -t main "$(cat /run/main-launch)" Enter
 
 # Light xterm.js theme (true white "notepad" paper), matching the notepad
 # theme above -- covers the shell prompt/chrome around the opencode TUI.
