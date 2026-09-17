@@ -61,14 +61,37 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
 IDLE_TIMEOUT_MIN = int(os.environ.get("IDLE_TIMEOUT_MIN", "30"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "7"))
-# Hours one dynamic <harness>-<slug> session may sit with no tab connected
-# before the idle sweep closes just that session (its CLI and its ttyd),
-# leaving the container, `main`, and every other slug running. Each slug is a
-# whole CLI process (~1GB for opencode) that the all-or-nothing container stop
-# can't reclaim while anything else on it is in use -- or ever, for an
-# IDLE_EXEMPT harness -- so this one ignores IDLE_EXEMPT. Pinned sessions are
-# kept. 0 disables.
-SESSION_IDLE_HOURS = int(os.environ.get("SESSION_IDLE_HOURS", "24"))
+# Hours one session may sit with no tab connected before the idle sweep closes
+# it: a dynamic <harness>-<slug> session (its CLI and its ttyd), and on an
+# IDLE_EXEMPT harness the base `main` session too (its CLI only -- see
+# _close_idle_main). Each session is a whole CLI process (~1GB for opencode)
+# that the all-or-nothing container stop can't reclaim while anything else on
+# it is in use -- or ever, for an IDLE_EXEMPT harness -- so this one ignores
+# IDLE_EXEMPT. Pinned sessions are kept. 0 disables.
+#
+# "24" applies to every harness; "24,opencode=3" overrides one type. That is
+# how opencode gives its RAM back sooner than claude: its container is never
+# stopped (it also hosts a dev stack) and each session holds ~0.9GB.
+def _parse_idle_hours(spec: str) -> tuple[int, dict[str, int]]:
+    default, per_harness = 24, {}
+    for part in spec.split(","):
+        name, _, value = part.strip().partition("=")
+        try:
+            if value:
+                per_harness[name.strip().lower()] = int(value)
+            elif name:
+                default = int(name)
+        except ValueError:
+            pass  # logging isn't configured yet; a bad value keeps the default
+    return default, per_harness
+
+
+SESSION_IDLE_HOURS, SESSION_IDLE_HOURS_BY_HARNESS = _parse_idle_hours(
+    os.environ.get("SESSION_IDLE_HOURS", "24"))
+
+
+def _idle_hours(harness_type: str) -> int:
+    return SESSION_IDLE_HOURS_BY_HARNESS.get(harness_type, SESSION_IDLE_HOURS)
 # Cap on concurrent dynamic SESSIONS per harness type. All sessions of one
 # harness type share the single base harness-<type> container (see
 # project_harness_multi_instance memory for why: a separate container per
@@ -353,6 +376,41 @@ def _ensure_dynamic_session(container, harness_type: str, instance: str) -> int:
     return port
 
 
+_MAIN_SESSION_SH = (
+    'tmux has-session -t "=main" 2>/dev/null && exit 0; '
+    'tmux new-session -d -s main -c /workspace; '
+    '[ -s /run/main-launch ] && tmux send-keys -t main "$(cat /run/main-launch)" Enter; '
+    'exit 0'
+)
+_base_checked: dict[str, float] = {}
+
+
+def _ensure_base_session(container) -> None:
+    """Recreate the base `main` tmux session if it is gone.
+
+    ttyd serves `main` by running `tmux attach-session -t main`, so once that
+    session ends -- the CLI was quit, or _close_idle_main stopped it to free
+    RAM -- every visit fails to attach and the terminal loops on "Connection
+    Closed" with nothing to do about it.  Each entrypoint writes its own launch
+    line (with `--continue`, so the conversation comes back) to
+    /run/main-launch; a container from an image that predates that file gets a
+    plain shell, which at least reconnects.
+
+    Checked at most every 10s per container, because /verify runs on every
+    request Caddy forwards.
+    """
+    if time.monotonic() - _base_checked.get(container.name, 0.0) < 10:
+        return
+    _base_checked[container.name] = time.monotonic()
+    try:
+        result = container.exec_run(["sh", "-c", _MAIN_SESSION_SH])
+        if result.exit_code != 0:
+            log.warning("could not ensure the main session in %s: %s", container.name,
+                        (result.output or b"").decode(errors="replace")[:200])
+    except Exception as e:
+        log.warning("could not ensure the main session in %s: %s", container.name, e)
+
+
 def _presented_tokens(request: Request) -> list[str]:
     """Every credential this request carries, best-first.
 
@@ -522,6 +580,7 @@ def _ensure_running(harness_type: str, instance: str | None) -> tuple[str, int]:
     _wait_for_port(container_name, HARNESS_PORT)
 
     if instance is None:
+        _ensure_base_session(container)
         return container_name, HARNESS_PORT
 
     port = _ensure_dynamic_session(container, harness_type, instance)
@@ -697,10 +756,13 @@ def _harness_ips(containers) -> dict[str, str]:
 def _note_model_request(request: Request) -> None:
     """A harness calling a model is in use even with no tab open. An agent
     left working used to be idle-stopped mid-task, 30 minutes after a phone
-    dropped its terminal connection."""
+    dropped its terminal connection.
+
+    The address identifies the container, not which session inside it is
+    working, so this keeps `main` alive too (_close_idle_main)."""
     name = _harness_by_ip.get(request.client.host if request.client else "")
     if name:
-        last_seen[name] = time.monotonic()
+        last_seen[name] = base_seen[name] = time.monotonic()
 
 
 def _busy_ports(container, ports: list[int]) -> set[int] | None:
@@ -756,11 +818,12 @@ def _kill_session(container, instance: str, port: int | None) -> None:
 def _close_idle_sessions(container, harness_type: str,
                          slug_ports: dict[str, int], busy: set[int] | None) -> None:
     """Refresh last_seen_ts for every dynamic session that has a tab
-    connected, and close the unpinned ones nobody has had open for
-    SESSION_IDLE_HOURS.  A closed slug's URL keeps working: the next visit
+    connected, and close the unpinned ones nobody has had open for this
+    harness's idle hours.  A closed slug's URL keeps working: the next visit
     starts it fresh, like one the retention sweep closed."""
     if busy is None or not slug_ports:
         return  # couldn't read connections: never close a session on a guess
+    hours = _idle_hours(harness_type)
     now = time.time()
     changed = False
     for slug, port in slug_ports.items():
@@ -773,7 +836,7 @@ def _close_idle_sessions(container, harness_type: str,
             changed = True
             continue
         idle_s = now - meta.get("last_seen_ts", now)
-        if SESSION_IDLE_HOURS <= 0 or meta.get("pinned") or idle_s < SESSION_IDLE_HOURS * 3600:
+        if hours <= 0 or meta.get("pinned") or idle_s < hours * 3600:
             continue
         log.info("closing session %s after %.1fh with no connected tab", key, idle_s / 3600)
         try:
@@ -785,6 +848,41 @@ def _close_idle_sessions(container, harness_type: str,
         changed = True
     if changed:
         _instances_save()
+
+
+base_seen: dict[str, float] = {}  # container → last time its `main` was in use
+
+
+def _close_idle_main(container, harness_type: str, busy: set[int] | None) -> None:
+    """End the CLI running in `main` on a harness the sweep never stops, once
+    nobody has had it open for that harness's idle hours.
+
+    An IDLE_EXEMPT container keeps running (opencode's also hosts a dev
+    stack), so its ~0.9GB CLI is the only thing left to reclaim.  Only the
+    tmux session is killed, never ttyd: ttyd is that container's PID 1, and
+    killing it would take the container -- dev stack included -- down with it.
+    The next visit brings the session back, with its conversation, through
+    _ensure_base_session.
+    """
+    hours = _idle_hours(harness_type)
+    if hours <= 0 or busy is None or harness_type not in IDLE_EXEMPT:
+        return
+    now = time.monotonic()
+    if HARNESS_PORT in busy:
+        base_seen[container.name] = now
+        return
+    since = base_seen.setdefault(container.name, now)
+    if now - since < hours * 3600:
+        return
+    base_seen[container.name] = now  # whatever happens, don't retry every pass
+    try:
+        result = container.exec_run(["tmux", "kill-session", "-t", "=main"])
+    except Exception as e:
+        log.warning("could not close main in %s: %s", container.name, e)
+        return
+    if result.exit_code == 0:
+        log.info("closed main in %s after %.1fh with no tab (container kept)",
+                 container.name, (now - since) / 3600)
 
 
 async def _idle_sweep() -> None:
@@ -802,18 +900,22 @@ async def _idle_sweep() -> None:
     windows are gone), but _ensure_dynamic_session recreates them on the next
     /verify for that slug.
 
-    The same connection reading also drives _close_idle_sessions, which
-    closes a single dynamic session nobody has had open for
-    SESSION_IDLE_HOURS -- on IDLE_EXEMPT harnesses too.
+    The same connection reading also drives _close_idle_sessions, which closes
+    a single dynamic session nobody has had open for its harness's idle hours
+    -- on IDLE_EXEMPT harnesses too -- and _close_idle_main, which does the
+    same for `main` on an IDLE_EXEMPT harness, whose container never stops.
     """
-    if IDLE_TIMEOUT_MIN <= 0 and SESSION_IDLE_HOURS <= 0:
+    session_hours = [SESSION_IDLE_HOURS] + list(SESSION_IDLE_HOURS_BY_HARNESS.values())
+    if IDLE_TIMEOUT_MIN <= 0 and not any(h > 0 for h in session_hours):
         log.info("idle sweep disabled (IDLE_TIMEOUT_MIN=0, SESSION_IDLE_HOURS=0)")
         return
     if IDLE_EXEMPT:
         log.info("idle sweep: never stopping %s (IDLE_EXEMPT)", ", ".join(sorted(IDLE_EXEMPT)))
-    if SESSION_IDLE_HOURS > 0:
-        log.info("idle sweep: closing dynamic sessions after %dh with no tab connected",
-                 SESSION_IDLE_HOURS)
+    if any(h > 0 for h in session_hours):
+        log.info("idle sweep: closing sessions with no tab connected after %s "
+                 "(`main` too, on an IDLE_EXEMPT harness)",
+                 ", ".join([f"{SESSION_IDLE_HOURS}h"]
+                           + [f"{h}: {v}h" for h, v in sorted(SESSION_IDLE_HOURS_BY_HARNESS.items())]))
     timeout_s = IDLE_TIMEOUT_MIN * 60
     while True:
         await asyncio.sleep(60)
@@ -838,6 +940,7 @@ async def _idle_sweep() -> None:
             slug_ports = _assigned_ports(htype)
             busy = _busy_ports(container, [HARNESS_PORT] + list(slug_ports.values()))
             _close_idle_sessions(container, htype, slug_ports, busy)
+            _close_idle_main(container, htype, busy)
             if IDLE_TIMEOUT_MIN <= 0 or htype in IDLE_EXEMPT:
                 # Never idle-stop this one: stopping the container kills its
                 # tmux server, and with it every CLI session running in it.
@@ -861,6 +964,8 @@ async def _idle_sweep() -> None:
         # Forget bookkeeping for containers that are no longer running.
         for name in [n for n in last_seen if n not in alive]:
             last_seen.pop(name, None)
+        for name in [n for n in base_seen if n not in alive]:
+            base_seen.pop(name, None)
 
 
 async def _retention_sweep() -> None:
