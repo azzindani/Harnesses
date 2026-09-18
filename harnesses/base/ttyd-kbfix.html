@@ -37,8 +37,8 @@
       how the KeyboardEvent approach below was verified end-to-end.)
    8. On-screen key toolbar (touch devices only) — the keys a mobile on-screen
       keyboard doesn't have, Termius/Termux-style. Esc / Ctrl / Tab / "/" and
-      the four arrows are always on screen, on two rows whose keys stretch to
-      share the full width; PgUp / PgDn / Home / End / Alt / Shift wait behind
+      the four arrows are always on screen, on two rows of the same small keys
+      as before; PgUp / PgDn / Home / End / Alt / Shift wait behind
       the ⌃ key, which opens a row above the bar. (The first version scrolled
       a single row sideways behind a 26px-wide chevron: too small to hit, and
       everything past the arrows was effectively hidden.) Ctrl/Alt/Shift are
@@ -68,8 +68,7 @@
   11. Key sizing — ttyd's page has no viewport meta tag, so a phone lays it
       out about 980 CSS px wide and shrinks it onto the screen: the toolbar
       keys came out 15x14px on a 390px-wide phone. They are sized in
-      `--lab-u` (CSS px per screen px) instead, about 40px tall on any phone,
-      each key stretching to share its row's width.
+      `--lab-u` (CSS px per screen px) instead, about 32px tall on any phone.
       The 📋 button and its panel (#6) keep their CSS sizes.
   12. Keyboard awareness — iOS Safari, and Android Chrome by default, shrink
       only the *visual* viewport when the on-screen keyboard opens, so the
@@ -555,20 +554,20 @@
         kbStyle.textContent =
           '#lab-keys-wrap{position:fixed;left:0;right:0;bottom:0;z-index:9998;' +
             'background:rgba(18,18,18,0.95);border-top:1px solid rgba(255,255,255,0.15);}' +
-          '#lab-keys,#lab-keys-extra{flex-direction:column;gap:calc(5*var(--lab-u,1px));' +
-            'padding:calc(5*var(--lab-u,1px)) calc(6*var(--lab-u,1px));}' +
+          '#lab-keys,#lab-keys-extra{flex-direction:column;gap:calc(4*var(--lab-u,1px));' +
+            'padding:calc(4*var(--lab-u,1px)) calc(6*var(--lab-u,1px));}' +
           '#lab-keys{display:flex;}' +
           /* The extra keys are a row ABOVE the bar, not a sideways scroll: the
              wrap is anchored to the bottom, so opening them grows it upward. */
           '#lab-keys-extra{display:none;border-bottom:1px solid rgba(255,255,255,0.10);}' +
           '#lab-keys-extra.lab-open{display:flex;}' +
-          '.lab-key-row{display:flex;flex-wrap:wrap;gap:calc(5*var(--lab-u,1px));}' +
-          /* flex:1 -- the keys share their row's full width, so each target is
-             as big as the screen allows rather than a fixed pill. */
-          '.lab-key-row button{flex:1 1 0;min-width:calc(40*var(--lab-u,1px));' +
-            'min-height:calc(40*var(--lab-u,1px));padding:0 calc(8*var(--lab-u,1px));' +
-            'border:1px solid rgba(255,255,255,0.22);border-radius:calc(7*var(--lab-u,1px));' +
-            'background:#2a2a2a;color:#ddd;font-size:calc(15*var(--lab-u,1px));font-family:monospace;' +
+          '.lab-key-row{display:flex;flex-wrap:wrap;gap:calc(4*var(--lab-u,1px));}' +
+          /* Same 38x32 key as before the rows existed: bigger targets were
+             tried and turned down for eating too much of the screen. */
+          '.lab-key-row button{flex:0 0 auto;min-width:calc(38*var(--lab-u,1px));' +
+            'min-height:calc(32*var(--lab-u,1px));padding:0 calc(9*var(--lab-u,1px));' +
+            'border:1px solid rgba(255,255,255,0.22);border-radius:calc(6*var(--lab-u,1px));' +
+            'background:#2a2a2a;color:#ddd;font-size:calc(14*var(--lab-u,1px));font-family:monospace;' +
             'cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;}' +
           '.lab-key-row button.lab-key-active{background:#0e639c;color:#fff;border-color:#0e639c;}';
         document.head.appendChild(kbStyle);
