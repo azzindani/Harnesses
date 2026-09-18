@@ -35,9 +35,13 @@
       the ESC byte, so raw SGR mouse escapes never survive it. Both confirmed
       via a real headless-browser run against a live session, which is also
       how the KeyboardEvent approach below was verified end-to-end.)
-   8. On-screen key toolbar (touch devices only) — Esc / Tab / Ctrl / Alt /
-      Shift / Home / End / PgUp / PgDn / arrows, Termius/Termux-style, for
-      keys a mobile on-screen keyboard doesn't have. Ctrl/Alt/Shift are
+   8. On-screen key toolbar (touch devices only) — the keys a mobile on-screen
+      keyboard doesn't have, Termius/Termux-style. Esc / Ctrl / Tab / "/" and
+      the four arrows are always on screen, on two rows whose keys stretch to
+      share the full width; PgUp / PgDn / Home / End / Alt / Shift wait behind
+      the ⌃ key, which opens a row above the bar. (The first version scrolled
+      a single row sideways behind a 26px-wide chevron: too small to hit, and
+      everything past the arrows was effectively hidden.) Ctrl/Alt/Shift are
       one-shot sticky toggles: tap to arm, then the *next* keypress (physical
       or another toolbar button) gets that modifier merged in, via the same
       attachCustomKeyEventHandler hook used for Ctrl+C/V (#3).
@@ -64,7 +68,8 @@
   11. Key sizing — ttyd's page has no viewport meta tag, so a phone lays it
       out about 980 CSS px wide and shrinks it onto the screen: the toolbar
       keys came out 15x14px on a 390px-wide phone. They are sized in
-      `--lab-u` (CSS px per screen px) instead, about 32px tall on any phone.
+      `--lab-u` (CSS px per screen px) instead, about 40px tall on any phone,
+      each key stretching to share its row's width.
       The 📋 button and its panel (#6) keep their CSS sizes.
   12. Keyboard awareness — iOS Safari, and Android Chrome by default, shrink
       only the *visual* viewport when the on-screen keyboard opens, so the
@@ -548,36 +553,46 @@
       if (navigator.maxTouchPoints > 0 || ('ontouchstart' in window)) {
         var kbStyle = document.createElement('style');
         kbStyle.textContent =
-          '#lab-keys-wrap{position:fixed;left:0;right:0;bottom:0;z-index:9998;}' +
-          '#lab-keys{display:flex;gap:calc(4*var(--lab-u,1px));overflow-x:auto;-webkit-overflow-scrolling:touch;' +
-            'padding:calc(4*var(--lab-u,1px)) calc(6*var(--lab-u,1px));background:rgba(18,18,18,0.95);' +
-            'border-top:1px solid rgba(255,255,255,0.15);}' +
-          /* Fade + chevron on the right edge hints there are more keys to
-             scroll to (Ctrl/Alt/Shift/Home/End/Esc/Tab don't fit on one
-             screen alongside the higher-priority arrows/paging keys). */
-          '#lab-keys-hint{position:absolute;top:0;right:0;bottom:0;width:calc(26*var(--lab-u,1px));' +
-            'pointer-events:none;display:flex;align-items:center;justify-content:flex-end;' +
-            'padding-right:calc(2*var(--lab-u,1px));color:rgba(255,255,255,0.55);font-size:calc(15*var(--lab-u,1px));' +
-            'background:linear-gradient(to right, rgba(18,18,18,0), rgba(18,18,18,0.95) 55%);}' +
-          '#lab-keys button{flex:0 0 auto;min-width:calc(38*var(--lab-u,1px));min-height:calc(32*var(--lab-u,1px));' +
-            'padding:0 calc(9*var(--lab-u,1px));' +
-            'border:1px solid rgba(255,255,255,0.22);border-radius:calc(6*var(--lab-u,1px));' +
-            'background:#2a2a2a;color:#ddd;font-size:calc(14*var(--lab-u,1px));font-family:monospace;' +
+          '#lab-keys-wrap{position:fixed;left:0;right:0;bottom:0;z-index:9998;' +
+            'background:rgba(18,18,18,0.95);border-top:1px solid rgba(255,255,255,0.15);}' +
+          '#lab-keys,#lab-keys-extra{flex-direction:column;gap:calc(5*var(--lab-u,1px));' +
+            'padding:calc(5*var(--lab-u,1px)) calc(6*var(--lab-u,1px));}' +
+          '#lab-keys{display:flex;}' +
+          /* The extra keys are a row ABOVE the bar, not a sideways scroll: the
+             wrap is anchored to the bottom, so opening them grows it upward. */
+          '#lab-keys-extra{display:none;border-bottom:1px solid rgba(255,255,255,0.10);}' +
+          '#lab-keys-extra.lab-open{display:flex;}' +
+          '.lab-key-row{display:flex;flex-wrap:wrap;gap:calc(5*var(--lab-u,1px));}' +
+          /* flex:1 -- the keys share their row's full width, so each target is
+             as big as the screen allows rather than a fixed pill. */
+          '.lab-key-row button{flex:1 1 0;min-width:calc(40*var(--lab-u,1px));' +
+            'min-height:calc(40*var(--lab-u,1px));padding:0 calc(8*var(--lab-u,1px));' +
+            'border:1px solid rgba(255,255,255,0.22);border-radius:calc(7*var(--lab-u,1px));' +
+            'background:#2a2a2a;color:#ddd;font-size:calc(15*var(--lab-u,1px));font-family:monospace;' +
             'cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;}' +
-          '#lab-keys button.lab-key-active{background:#0e639c;color:#fff;border-color:#0e639c;}';
+          '.lab-key-row button.lab-key-active{background:#0e639c;color:#fff;border-color:#0e639c;}';
         document.head.appendChild(kbStyle);
 
         var wrap = document.createElement('div');
         wrap.id = 'lab-keys-wrap';
+        var extra = document.createElement('div');
+        extra.id = 'lab-keys-extra';
         var bar = document.createElement('div');
         bar.id = 'lab-keys';
 
-        function addKeyBtn(label, onTap) {
+        function addRow(parent) {
+          var row = document.createElement('div');
+          row.className = 'lab-key-row';
+          parent.appendChild(row);
+          return row;
+        }
+
+        function addKeyBtn(row, label, onTap) {
           var b = document.createElement('button');
           b.textContent = label;
           b.addEventListener('touchstart', function (e) { e.preventDefault(); onTap(b); }, { passive: false });
           b.addEventListener('click', function () { onTap(b); });
-          bar.appendChild(b);
+          row.appendChild(b);
           return b;
         }
 
@@ -585,47 +600,51 @@
           return function () { sendKey(key, code, keyCode, consumeArmed()); };
         }
 
-        /* Arrows and paging first -- the keys people actually reach for
-           while reading/scrolling a transcript -- so they're visible without
-           scrolling the bar on a narrow phone screen. Less-urgent keys
-           (Esc/Tab/Home/End/Ctrl/Alt/Shift) come after and need a swipe. */
-        addKeyBtn('←', tapKey('ArrowLeft', 'ArrowLeft', 37));
-        addKeyBtn('↑', tapKey('ArrowUp', 'ArrowUp', 38));
-        addKeyBtn('↓', tapKey('ArrowDown', 'ArrowDown', 40));
-        addKeyBtn('→', tapKey('ArrowRight', 'ArrowRight', 39));
-        addKeyBtn('PgUp', tapKey('PageUp', 'PageUp', 33));
-        addKeyBtn('PgDn', tapKey('PageDown', 'PageDown', 34));
-        addKeyBtn('Esc', tapKey('Escape', 'Escape', 27));
-        addKeyBtn('Tab', tapKey('Tab', 'Tab', 9));
-        addKeyBtn('Home', tapKey('Home', 'Home', 36));
-        addKeyBtn('End', tapKey('End', 'End', 35));
+        var expanded = false;
+        function setExpanded(v) {
+          expanded = v;
+          extra.classList.toggle('lab-open', expanded);
+          moreBtn.classList.toggle('lab-key-active', expanded);
+          moreBtn.textContent = expanded ? '⌄' : '⌃';
+          /* The bar's height just changed: #12 re-measures it on resize and
+             moves the terminal's bottom edge to match. */
+          window.dispatchEvent(new Event('resize'));
+        }
 
-        var ctrlBtn  = addKeyBtn('Ctrl',  function () { setArmed('ctrl', !armed.ctrl); });
-        var altBtn   = addKeyBtn('Alt',   function () { setArmed('alt', !armed.alt); });
-        var shiftBtn = addKeyBtn('Shift', function () { setArmed('shift', !armed.shift); });
+        /* Always on screen, because these are the keys asked for by name:
+           Esc / Ctrl / Tab / "/" on one row, the arrows on the row below it
+           (closest to the thumb, and the ones reached for most while reading
+           a transcript). Everything else is one tap away behind ⌃. */
+        var topRow = addRow(bar);
+        addKeyBtn(topRow, 'Esc', tapKey('Escape', 'Escape', 27));
+        var ctrlBtn = addKeyBtn(topRow, 'Ctrl', function () { setArmed('ctrl', !armed.ctrl); });
+        addKeyBtn(topRow, 'Tab', tapKey('Tab', 'Tab', 9));
+        addKeyBtn(topRow, '/', tapKey('/', 'Slash', 191));
+        var moreBtn = addKeyBtn(topRow, '⌃', function () { setExpanded(!expanded); });
+
+        var arrowRow = addRow(bar);
+        addKeyBtn(arrowRow, '←', tapKey('ArrowLeft', 'ArrowLeft', 37));
+        addKeyBtn(arrowRow, '↑', tapKey('ArrowUp', 'ArrowUp', 38));
+        addKeyBtn(arrowRow, '↓', tapKey('ArrowDown', 'ArrowDown', 40));
+        addKeyBtn(arrowRow, '→', tapKey('ArrowRight', 'ArrowRight', 39));
+
+        var extraRow = addRow(extra);
+        addKeyBtn(extraRow, 'PgUp', tapKey('PageUp', 'PageUp', 33));
+        addKeyBtn(extraRow, 'PgDn', tapKey('PageDown', 'PageDown', 34));
+        addKeyBtn(extraRow, 'Home', tapKey('Home', 'Home', 36));
+        addKeyBtn(extraRow, 'End', tapKey('End', 'End', 35));
+        var altBtn = addKeyBtn(extraRow, 'Alt', function () { setArmed('alt', !armed.alt); });
+        var shiftBtn = addKeyBtn(extraRow, 'Shift', function () { setArmed('shift', !armed.shift); });
+
         armedListeners.push(function () {
           ctrlBtn.classList.toggle('lab-key-active', armed.ctrl);
           altBtn.classList.toggle('lab-key-active', armed.alt);
           shiftBtn.classList.toggle('lab-key-active', armed.shift);
         });
 
-        var hint = document.createElement('div');
-        hint.id = 'lab-keys-hint';
-        hint.textContent = '›';
+        wrap.appendChild(extra);
         wrap.appendChild(bar);
-        wrap.appendChild(hint);
         document.body.appendChild(wrap);
-
-        /* Only show the "more keys" hint while there's actually somewhere
-           left to scroll to -- hide it once the bar doesn't overflow, or
-           once the user has scrolled it all the way to the end. */
-        function updateHint() {
-          var overflow = bar.scrollWidth - bar.clientWidth;
-          hint.style.display = (overflow > 4 && bar.scrollLeft < overflow - 4) ? 'flex' : 'none';
-        }
-        bar.addEventListener('scroll', updateHint, { passive: true });
-        window.addEventListener('resize', updateHint);
-        updateHint();
 
         installed.push('key-toolbar');
       }
