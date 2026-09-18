@@ -36,12 +36,13 @@
       via a real headless-browser run against a live session, which is also
       how the KeyboardEvent approach below was verified end-to-end.)
    8. On-screen key toolbar (touch devices only) — the keys a mobile on-screen
-      keyboard doesn't have, Termius/Termux-style. Esc / Ctrl / Tab / "/" and
-      the four arrows are always on screen, on two rows of the same small keys
-      as before; PgUp / PgDn / Home / End / Alt / Shift wait behind
-      the ⌃ key, which opens a row above the bar. (The first version scrolled
-      a single row sideways behind a 26px-wide chevron: too small to hit, and
-      everything past the arrows was effectively hidden.) Ctrl/Alt/Shift are
+      keyboard doesn't have, Termius/Termux-style, on ONE row that always
+      fits: the keys share the row's width evenly, so nothing scrolls sideways
+      and no second row eats terminal lines. Arrows / Esc / Ctrl / Tab / "/"
+      are the first page; the ⌃ key, always last, swaps that same row to
+      PgUp / PgDn / Home / End / Alt / Shift and back. (Two earlier tries were
+      rejected: a sideways scroll behind a 26px chevron too small to hit, then
+      two stacked rows that cost 13 terminal lines.) Ctrl/Alt/Shift are
       one-shot sticky toggles: tap to arm, then the *next* keypress (physical
       or another toolbar button) gets that modifier merged in, via the same
       attachCustomKeyEventHandler hook used for Ctrl+C/V (#3).
@@ -554,44 +555,33 @@
         kbStyle.textContent =
           '#lab-keys-wrap{position:fixed;left:0;right:0;bottom:0;z-index:9998;' +
             'background:rgba(18,18,18,0.95);border-top:1px solid rgba(255,255,255,0.15);}' +
-          '#lab-keys,#lab-keys-extra{flex-direction:column;gap:calc(4*var(--lab-u,1px));' +
+          '#lab-keys{display:flex;gap:calc(4*var(--lab-u,1px));' +
             'padding:calc(4*var(--lab-u,1px)) calc(6*var(--lab-u,1px));}' +
-          '#lab-keys{display:flex;}' +
-          /* The extra keys are a row ABOVE the bar, not a sideways scroll: the
-             wrap is anchored to the bottom, so opening them grows it upward. */
-          '#lab-keys-extra{display:none;border-bottom:1px solid rgba(255,255,255,0.10);}' +
-          '#lab-keys-extra.lab-open{display:flex;}' +
-          '.lab-key-row{display:flex;flex-wrap:wrap;gap:calc(4*var(--lab-u,1px));}' +
-          /* Same 38x32 key as before the rows existed: bigger targets were
-             tried and turned down for eating too much of the screen. */
-          '.lab-key-row button{flex:0 0 auto;min-width:calc(38*var(--lab-u,1px));' +
-            'min-height:calc(32*var(--lab-u,1px));padding:0 calc(9*var(--lab-u,1px));' +
+          /* flex:1 with min-width:0 -- the keys divide the row between them,
+             so a page always fits on one line at any phone width: nothing to
+             scroll, and the bar stays one key tall. */
+          '#lab-keys button{flex:1 1 0;min-width:0;min-height:calc(32*var(--lab-u,1px));' +
+            'padding:0 calc(3*var(--lab-u,1px));' +
             'border:1px solid rgba(255,255,255,0.22);border-radius:calc(6*var(--lab-u,1px));' +
             'background:#2a2a2a;color:#ddd;font-size:calc(14*var(--lab-u,1px));font-family:monospace;' +
+            'white-space:nowrap;overflow:hidden;' +
             'cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;}' +
-          '.lab-key-row button.lab-key-active{background:#0e639c;color:#fff;border-color:#0e639c;}';
+          '#lab-keys button.lab-key-active{background:#0e639c;color:#fff;border-color:#0e639c;}';
         document.head.appendChild(kbStyle);
 
         var wrap = document.createElement('div');
         wrap.id = 'lab-keys-wrap';
-        var extra = document.createElement('div');
-        extra.id = 'lab-keys-extra';
         var bar = document.createElement('div');
         bar.id = 'lab-keys';
 
-        function addRow(parent) {
-          var row = document.createElement('div');
-          row.className = 'lab-key-row';
-          parent.appendChild(row);
-          return row;
-        }
-
-        function addKeyBtn(row, label, onTap) {
+        var page1 = [], page2 = [];
+        function addKeyBtn(page, label, onTap) {
           var b = document.createElement('button');
           b.textContent = label;
           b.addEventListener('touchstart', function (e) { e.preventDefault(); onTap(b); }, { passive: false });
           b.addEventListener('click', function () { onTap(b); });
-          row.appendChild(b);
+          bar.appendChild(b);
+          if (page) page.push(b);
           return b;
         }
 
@@ -599,41 +589,38 @@
           return function () { sendKey(key, code, keyCode, consumeArmed()); };
         }
 
-        var expanded = false;
-        function setExpanded(v) {
-          expanded = v;
-          extra.classList.toggle('lab-open', expanded);
-          moreBtn.classList.toggle('lab-key-active', expanded);
-          moreBtn.textContent = expanded ? '⌄' : '⌃';
-          /* The bar's height just changed: #12 re-measures it on resize and
-             moves the terminal's bottom edge to match. */
-          window.dispatchEvent(new Event('resize'));
+        /* One page at a time in the one row -- hidden keys take no space, so
+           the visible set always divides the same single row. */
+        var onPage2 = false;
+        function setPage2(v) {
+          onPage2 = v;
+          page1.forEach(function (b) { b.style.display = v ? 'none' : ''; });
+          page2.forEach(function (b) { b.style.display = v ? '' : 'none'; });
+          moreBtn.textContent = v ? '⌄' : '⌃';
+          moreBtn.classList.toggle('lab-key-active', v);
         }
 
-        /* Always on screen, because these are the keys asked for by name:
-           Esc / Ctrl / Tab / "/" on one row, the arrows on the row below it
-           (closest to the thumb, and the ones reached for most while reading
-           a transcript). Everything else is one tap away behind ⌃. */
-        var topRow = addRow(bar);
-        addKeyBtn(topRow, 'Esc', tapKey('Escape', 'Escape', 27));
-        var ctrlBtn = addKeyBtn(topRow, 'Ctrl', function () { setArmed('ctrl', !armed.ctrl); });
-        addKeyBtn(topRow, 'Tab', tapKey('Tab', 'Tab', 9));
-        addKeyBtn(topRow, '/', tapKey('/', 'Slash', 191));
-        var moreBtn = addKeyBtn(topRow, '⌃', function () { setExpanded(!expanded); });
+        /* Page 1 is what gets reached for: the arrows, then the keys asked
+           for by name. Page 2 is everything else. The ⌃ key is added last, so
+           it stays at the row's right edge on both pages. */
+        addKeyBtn(page1, '←', tapKey('ArrowLeft', 'ArrowLeft', 37));
+        addKeyBtn(page1, '↑', tapKey('ArrowUp', 'ArrowUp', 38));
+        addKeyBtn(page1, '↓', tapKey('ArrowDown', 'ArrowDown', 40));
+        addKeyBtn(page1, '→', tapKey('ArrowRight', 'ArrowRight', 39));
+        addKeyBtn(page1, 'Esc', tapKey('Escape', 'Escape', 27));
+        var ctrlBtn = addKeyBtn(page1, 'Ctrl', function () { setArmed('ctrl', !armed.ctrl); });
+        addKeyBtn(page1, 'Tab', tapKey('Tab', 'Tab', 9));
+        addKeyBtn(page1, '/', tapKey('/', 'Slash', 191));
 
-        var arrowRow = addRow(bar);
-        addKeyBtn(arrowRow, '←', tapKey('ArrowLeft', 'ArrowLeft', 37));
-        addKeyBtn(arrowRow, '↑', tapKey('ArrowUp', 'ArrowUp', 38));
-        addKeyBtn(arrowRow, '↓', tapKey('ArrowDown', 'ArrowDown', 40));
-        addKeyBtn(arrowRow, '→', tapKey('ArrowRight', 'ArrowRight', 39));
+        addKeyBtn(page2, 'PgUp', tapKey('PageUp', 'PageUp', 33));
+        addKeyBtn(page2, 'PgDn', tapKey('PageDown', 'PageDown', 34));
+        addKeyBtn(page2, 'Home', tapKey('Home', 'Home', 36));
+        addKeyBtn(page2, 'End', tapKey('End', 'End', 35));
+        var altBtn = addKeyBtn(page2, 'Alt', function () { setArmed('alt', !armed.alt); });
+        var shiftBtn = addKeyBtn(page2, 'Shift', function () { setArmed('shift', !armed.shift); });
 
-        var extraRow = addRow(extra);
-        addKeyBtn(extraRow, 'PgUp', tapKey('PageUp', 'PageUp', 33));
-        addKeyBtn(extraRow, 'PgDn', tapKey('PageDown', 'PageDown', 34));
-        addKeyBtn(extraRow, 'Home', tapKey('Home', 'Home', 36));
-        addKeyBtn(extraRow, 'End', tapKey('End', 'End', 35));
-        var altBtn = addKeyBtn(extraRow, 'Alt', function () { setArmed('alt', !armed.alt); });
-        var shiftBtn = addKeyBtn(extraRow, 'Shift', function () { setArmed('shift', !armed.shift); });
+        var moreBtn = addKeyBtn(null, '⌃', function () { setPage2(!onPage2); });
+        setPage2(false);
 
         armedListeners.push(function () {
           ctrlBtn.classList.toggle('lab-key-active', armed.ctrl);
@@ -641,7 +628,6 @@
           shiftBtn.classList.toggle('lab-key-active', armed.shift);
         });
 
-        wrap.appendChild(extra);
         wrap.appendChild(bar);
         document.body.appendChild(wrap);
 
