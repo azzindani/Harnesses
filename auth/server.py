@@ -163,6 +163,7 @@ ALL_SUBDOMAINS = HARNESSES + UTILITY_SERVICES
 INSTANCE_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$")
 ENV_FILE = "/app/.env"  # bind-mounted from host docker-compose.yml
 INSTANCES_FILE = "/data/instances.json"  # persisted across auth-service restarts
+SPECS_DIR = "/data/container-specs"      # enough to rebuild a harness container
 
 # Launch command for a DYNAMIC <harness>-<slug> session, mirroring what each
 # harness's own entrypoint.sh sends to its "main" tmux session (`tmux send-keys
@@ -559,6 +560,83 @@ def _wait_for_port(container_name: str, port: int) -> None:
     )
 
 
+# Compose lists a container's own short id among its network aliases; that
+# means nothing for a container we are about to create.
+_SHORT_ID = re.compile(r"[0-9a-f]{12}")
+_spec_saved: dict[str, float] = {}
+
+
+def _spec_path(name: str) -> str:
+    return os.path.join(SPECS_DIR, f"{name}.json")
+
+
+def _save_container_spec(container) -> None:
+    """Remember how to rebuild this container, at most every 10 minutes.
+
+    A harness the idle sweep stopped is a *stopped* container, and
+    `docker container prune` (or `docker system prune`) deletes those while
+    leaving running ones alone.  On 2026-09-18 that removed harness-claude
+    overnight, and every claude URL 502'd afterwards: this service can start a
+    container, but only compose could create one.
+    """
+    if time.monotonic() - _spec_saved.get(container.name, 0.0) < 600:
+        return
+    attrs = container.attrs
+    config = attrs.get("Config") or {}
+    networks = {}
+    for net, info in ((attrs.get("NetworkSettings") or {}).get("Networks") or {}).items():
+        networks[net] = [a for a in (info.get("Aliases") or []) if a and not _SHORT_ID.fullmatch(a)]
+    spec = {
+        "Image": config.get("Image"), "Env": config.get("Env") or [],
+        "Cmd": config.get("Cmd"), "Entrypoint": config.get("Entrypoint"),
+        "Labels": config.get("Labels") or {}, "WorkingDir": config.get("WorkingDir") or "",
+        "Tty": bool(config.get("Tty")), "OpenStdin": bool(config.get("OpenStdin")),
+        "HostConfig": attrs.get("HostConfig") or {}, "Networks": networks,
+    }
+    try:
+        os.makedirs(SPECS_DIR, exist_ok=True)
+        path = _spec_path(container.name)
+        tmp = f"{path}.{threading.get_ident()}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(spec, f)
+        os.replace(tmp, path)
+        _spec_saved[container.name] = time.monotonic()
+    except Exception as e:
+        log.warning("could not save the spec for %s: %s", container.name, e)
+
+
+def _recreate_container(name: str):
+    """Rebuild a harness container that no longer exists, from its saved spec.
+    Returns the new (not yet started) container, or None if there is no spec."""
+    path = _spec_path(name)
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        spec = json.load(f)
+    networks = spec.get("Networks") or {}
+    first = next(iter(networks), None)
+    networking = None
+    if first:
+        # Only one network can be attached at creation; the rest are connected
+        # afterwards.
+        networking = docker_client.api.create_networking_config(
+            {first: docker_client.api.create_endpoint_config(aliases=networks[first] or None)})
+    log.info("recreating %s from its saved spec (the container was removed)", name)
+    created = docker_client.api.create_container(
+        image=spec["Image"], name=name, command=spec.get("Cmd"),
+        entrypoint=spec.get("Entrypoint"), environment=spec.get("Env"),
+        labels=spec.get("Labels"), working_dir=spec.get("WorkingDir") or None,
+        tty=spec.get("Tty", False), stdin_open=spec.get("OpenStdin", False),
+        host_config=spec.get("HostConfig"), networking_config=networking)
+    container = docker_client.containers.get(created["Id"])
+    for extra in list(networks)[1:]:
+        try:
+            docker_client.networks.get(extra).connect(container, aliases=networks[extra] or None)
+        except Exception as e:
+            log.warning("could not attach %s to %s: %s", name, extra, e)
+    return container
+
+
 def _ensure_running(harness_type: str, instance: str | None) -> tuple[str, int]:
     """Make sure the harness's one base container is running and reachable.
 
@@ -572,7 +650,10 @@ def _ensure_running(harness_type: str, instance: str | None) -> tuple[str, int]:
     try:
         container = docker_client.containers.get(container_name)
     except NotFound:
-        raise HTTPException(status_code=502, detail=f"container {container_name} does not exist")
+        container = _recreate_container(container_name)
+        if container is None:
+            raise HTTPException(status_code=502, detail=f"container {container_name} does not exist")
+    _save_container_spec(container)
 
     if container.status != "running":
         log.info("starting %s (was %s)", container_name, container.status)
@@ -937,6 +1018,7 @@ async def _idle_sweep() -> None:
             if htype is None:
                 continue  # not a managed harness container
             alive.add(name)
+            _save_container_spec(container)
             slug_ports = _assigned_ports(htype)
             busy = _busy_ports(container, [HARNESS_PORT] + list(slug_ports.values()))
             _close_idle_sessions(container, htype, slug_ports, busy)
