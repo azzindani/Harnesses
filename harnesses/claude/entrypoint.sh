@@ -109,7 +109,14 @@ for mid in free_ids:
     overrides.setdefault(f"anthropic/{mid}", zero)
 path = "/etc/claude-code/managed-settings.json"
 with open(path + ".tmp", "w") as f:
-    json.dump({"modelPricing": {"overrides": overrides}}, f, indent=1)
+    # WebSearch runs on Anthropic's own servers, so a session on OpenCode Go or
+    # OpenRouter gets an empty result set and burns a turn on it -- denied here,
+    # where a session can't override it, leaving the web MCP's `search` as the
+    # one that works. WebFetch is NOT denied: it fetches in the client and
+    # summarises with the configured model, and answers correctly (verified on
+    # example.com and docs.python.org).
+    json.dump({"modelPricing": {"overrides": overrides},
+               "permissions": {"deny": ["WebSearch"]}}, f, indent=1)
 os.replace(path + ".tmp", path)
 print(f"pricing: {len(go)} OpenCode Go models, {len(free_ids)} free OpenRouter models")
 PY
