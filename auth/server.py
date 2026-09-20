@@ -59,7 +59,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = "HS256"
-IDLE_TIMEOUT_MIN = int(os.environ.get("IDLE_TIMEOUT_MIN", "30"))
 RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "7"))
 # Hours one session may sit with no tab connected before the idle sweep closes
 # it: a dynamic <harness>-<slug> session (its CLI and its ttyd), and on an
@@ -69,11 +68,11 @@ RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "7"))
 # it is in use -- or ever, for an IDLE_EXEMPT harness -- so this one ignores
 # IDLE_EXEMPT. Pinned sessions are kept. 0 disables.
 #
-# "24" applies to every harness; "24,opencode=3" overrides one type. That is
-# how opencode gives its RAM back sooner than claude: its container is never
-# stopped (it also hosts a dev stack) and each session holds ~0.9GB.
-def _parse_idle_hours(spec: str) -> tuple[int, dict[str, int]]:
-    default, per_harness = 24, {}
+# "24" applies to every harness; "24,opencode=3" overrides one type -- the same
+# spelling IDLE_TIMEOUT_MIN takes, so one harness can be given up sooner than
+# another (opencode holds ~0.9GB per session, claude ~1GB across three).
+def _parse_scoped(spec: str, default: int) -> tuple[int, dict[str, int]]:
+    per_harness: dict[str, int] = {}
     for part in spec.split(","):
         name, _, value = part.strip().partition("=")
         try:
@@ -86,12 +85,18 @@ def _parse_idle_hours(spec: str) -> tuple[int, dict[str, int]]:
     return default, per_harness
 
 
-SESSION_IDLE_HOURS, SESSION_IDLE_HOURS_BY_HARNESS = _parse_idle_hours(
-    os.environ.get("SESSION_IDLE_HOURS", "24"))
+SESSION_IDLE_HOURS, SESSION_IDLE_HOURS_BY_HARNESS = _parse_scoped(
+    os.environ.get("SESSION_IDLE_HOURS", "24"), 24)
+IDLE_TIMEOUT_MIN, IDLE_TIMEOUT_MIN_BY_HARNESS = _parse_scoped(
+    os.environ.get("IDLE_TIMEOUT_MIN", "30"), 30)
 
 
 def _idle_hours(harness_type: str) -> int:
     return SESSION_IDLE_HOURS_BY_HARNESS.get(harness_type, SESSION_IDLE_HOURS)
+
+
+def _idle_timeout_min(harness_type: str) -> int:
+    return IDLE_TIMEOUT_MIN_BY_HARNESS.get(harness_type, IDLE_TIMEOUT_MIN)
 # Cap on concurrent dynamic SESSIONS per harness type. All sessions of one
 # harness type share the single base harness-<type> container (see
 # project_harness_multi_instance memory for why: a separate container per
@@ -987,7 +992,8 @@ async def _idle_sweep() -> None:
     same for `main` on an IDLE_EXEMPT harness, whose container never stops.
     """
     session_hours = [SESSION_IDLE_HOURS] + list(SESSION_IDLE_HOURS_BY_HARNESS.values())
-    if IDLE_TIMEOUT_MIN <= 0 and not any(h > 0 for h in session_hours):
+    timeouts = [IDLE_TIMEOUT_MIN] + list(IDLE_TIMEOUT_MIN_BY_HARNESS.values())
+    if not any(t > 0 for t in timeouts) and not any(h > 0 for h in session_hours):
         log.info("idle sweep disabled (IDLE_TIMEOUT_MIN=0, SESSION_IDLE_HOURS=0)")
         return
     if IDLE_EXEMPT:
@@ -997,7 +1003,6 @@ async def _idle_sweep() -> None:
                  "(`main` too, on an IDLE_EXEMPT harness)",
                  ", ".join([f"{SESSION_IDLE_HOURS}h"]
                            + [f"{h}: {v}h" for h, v in sorted(SESSION_IDLE_HOURS_BY_HARNESS.items())]))
-    timeout_s = IDLE_TIMEOUT_MIN * 60
     while True:
         await asyncio.sleep(60)
         now = time.monotonic()
@@ -1023,7 +1028,8 @@ async def _idle_sweep() -> None:
             busy = _busy_ports(container, [HARNESS_PORT] + list(slug_ports.values()))
             _close_idle_sessions(container, htype, slug_ports, busy)
             _close_idle_main(container, htype, busy)
-            if IDLE_TIMEOUT_MIN <= 0 or htype in IDLE_EXEMPT:
+            timeout_s = _idle_timeout_min(htype) * 60
+            if timeout_s <= 0 or htype in IDLE_EXEMPT:
                 # Never idle-stop this one: stopping the container kills its
                 # tmux server, and with it every CLI session running in it.
                 last_seen[name] = now
@@ -1178,7 +1184,9 @@ def _autofill_tokens_and_log_urls() -> None:
         log.info("  https://%s.%s/?token=%s", h, BASE_DOMAIN, JWT_SECRET)
     log.info(sep)
     cap = f"max {MAX_INSTANCES_PER_HARNESS}/harness" if MAX_INSTANCES_PER_HARNESS > 0 else "uncapped"
-    log.info("Multi-session pattern (%s, idle-stop %dmin) — visit any URL of this", cap, IDLE_TIMEOUT_MIN)
+    log.info("Multi-session pattern (%s, idle-stop %s) — visit any URL of this", cap,
+             ", ".join([f"{IDLE_TIMEOUT_MIN}min"]
+                       + [f"{h}: {m}min" for h, m in sorted(IDLE_TIMEOUT_MIN_BY_HARNESS.items())]))
     log.info("shape to open an additional tmux+ttyd session INSIDE the same base")
     log.info("container, sharing its one /workspace (auto-cleanup after %dd of no", RETENTION_DAYS)
     log.info("activity unless you /pin it):")
