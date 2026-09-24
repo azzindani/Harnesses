@@ -294,7 +294,11 @@ services:
 
   harness-claude:
     <<: *harness-defaults
-    build: ./harnesses/claude
+    build:
+      context: ./harnesses/claude
+      args:
+        # Image to take Pipeline's binary from (see harnesses/claude/Dockerfile).
+        PIPELINE_MCP_IMAGE: ${PIPELINE_MCP_IMAGE:-harness-base:latest}
     image: harness-claude:latest
     container_name: harness-claude
     # Persist session history (~/.claude: transcripts, history.jsonl, sessions)
