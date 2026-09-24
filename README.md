@@ -76,7 +76,7 @@ Always-on: the shared Caddy router + `harnesses-auth`. Everything else (the 11 h
 
 > Only Claude Code and OpenCode are actively run day to day; the other 9 harness containers are stopped (not removed from `docker-compose.yml`) to save RAM/storage. Any of them comes back with `docker compose --profile on-demand up -d harness-<name>` — their images rebuild from the committed Dockerfiles and their history (see below) was never deleted.
 
-Every harness that supports MCP (all but Aider, Plandex, Pi) registers optional remote servers the same env-var-gated way: **Folio** and **web search/fetch** (bundled DuckDuckGo sidecar, no key), plus the 6 self-hosted `azzindani/MCP_*` tool servers — **Math**, **Browser** (real browser automation, not the DuckDuckGo sidecar), **File_System**, **Machine_Learning**, **Data_Analyst**, and **Microsoft_Office**. The latter three mount several sub-servers each with no single unified endpoint, so every sub-server is registered individually (`ml-basic`, `data-workspace`, `office-pptx-design`, etc.) — up to 26 MCP server connections and ~225 extra tools when all are configured. Each pair of `..._URL`/`..._TOKEN` vars is independent — leave any blank to skip that repo.
+Every harness that supports MCP (all but Aider, Plandex, Pi) registers optional remote servers the same env-var-gated way: **Folio** and **web search/fetch** (bundled DuckDuckGo sidecar, no key), plus the 6 self-hosted `azzindani/MCP_*` tool servers — **Math**, **Browser** (real browser automation, not the DuckDuckGo sidecar), **File_System**, **Machine_Learning**, **Data_Analyst**, and **Microsoft_Office**. The latter three (and Documents) mount several sub-servers each and also serve them all as domain tools at one `/mcp`: Claude Code and OpenCode register that one endpoint per repo (`ml`, `data`, `office`, `docs`), 33 tools across all seven; the other harnesses still register every sub-server individually (`ml-basic`, `data-workspace`, `office-pptx-design`, etc.). Each pair of `..._URL`/`..._TOKEN` vars is independent — leave any blank to skip that repo.
 
 ## Quick start
 
@@ -129,7 +129,7 @@ If a session *does* get rejected, the auth service says so explicitly — `docke
 
 Staying *connected* is a separate concern from staying logged in — a harness sleeping under you is normal, and never costs you the session:
 
-- **Containers still sleep, and waking up resumes your conversation.** Stopping a container kills its tmux server, so the terminal *window* can't survive — but the conversation itself lives in `history/`, and `claude`/`opencode` relaunch their `main` session with `--continue`, so a visit after an idle-stop drops you back into the session you left rather than a blank one. Cold start is real (~60s for claude, which registers ~26 MCP servers before ttyd listens) — that's the price of getting the RAM back, and `COLD_START_TIMEOUT_S` covers it.
+- **Containers still sleep, and waking up resumes your conversation.** Stopping a container kills its tmux server, so the terminal *window* can't survive — but the conversation itself lives in `history/`, and `claude`/`opencode` relaunch their `main` session with `--continue`, so a visit after an idle-stop drops you back into the session you left rather than a blank one. Cold start is real (~60s for claude, which registers each MCP server before ttyd listens) — that's the price of getting the RAM back, and `COLD_START_TIMEOUT_S` covers it.
 - `IDLE_EXEMPT` — harness types the idle sweep must *never* stop, e.g. `IDLE_EXEMPT=claude,opencode`. Empty by default, which is usually right: a stop hands back all of that harness's RAM, and the next visit to its link starts it again. Exempt one whose container hosts something a stop would take down, or whose cold start you can't tolerate — its RAM then comes back only through `SESSION_IDLE_HOURS`. One caveat either way: a stopped container is what `docker container prune` deletes, so the auth service saves each harness's spec and rebuilds from it on the next visit.
 - Dynamic `<harness>-<slug>` sessions deliberately do *not* get `--continue`: they share the one `/workspace`, so resuming would point every parallel slug at the same conversation. Reopen a past one from inside the CLI (`/resume` in Claude Code, the session picker in opencode).
 - **The browser terminal reconnects itself** when a sleep (or a phone backgrounding a tab, or a network blip) drops the socket — no reload, no re-login. Mechanics in [Copy/paste and scrolling in the browser terminal](#copypaste-and-scrolling-in-the-browser-terminal) below.
@@ -216,9 +216,9 @@ See `.env.example` for the full, commented list. Highlights beyond the provider 
 | `MATH_MCP_URL` / `..._TOKEN` | optional MCP_Math server |
 | `BROWSER_MCP_URL` / `..._TOKEN` | optional MCP_Web_Browser server (real browser automation, distinct from the `web` DuckDuckGo sidecar) |
 | `FS_MCP_URL` / `..._TOKEN` | optional MCP_File_System server |
-| `ML_MCP_BASE_URL` / `..._TOKEN` | optional MCP_Machine_Learning server — 3 sub-servers registered as `ml-basic`/`ml-medium`/`ml-advanced` |
-| `DATA_MCP_BASE_URL` / `..._TOKEN` | optional MCP_Data_Analyst server — 7 sub-servers registered as `data-<name>` |
-| `OFFICE_MCP_BASE_URL` / `..._TOKEN` | optional MCP_Microsoft_Office server — 11 sub-servers registered as `office-<name>` |
+| `ML_MCP_BASE_URL` / `..._TOKEN` | optional MCP_Machine_Learning server — `ml` at `<BASE>/mcp` for claude/opencode; the 3 sub-servers as `ml-basic`/`ml-medium`/`ml-advanced` elsewhere |
+| `DATA_MCP_BASE_URL` / `..._TOKEN` | optional MCP_Data_Analyst server — `data` at `<BASE>/mcp` for claude/opencode; 7 sub-servers as `data-<name>` elsewhere |
+| `OFFICE_MCP_BASE_URL` / `..._TOKEN` | optional MCP_Microsoft_Office server — `office` at `<BASE>/mcp` for claude/opencode; 11 sub-servers as `office-<name>` elsewhere |
 
 `.env` is gitignored — never commit it. Commit changes to `.env.example` (placeholders only) instead.
 
