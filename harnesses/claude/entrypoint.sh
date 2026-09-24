@@ -196,34 +196,27 @@ fi
 # Web search/fetch (DuckDuckGo sidecar) — no auth header.
 [ -n "$WEB_MCP_URL" ] && _mcp_register web "$WEB_MCP_URL"
 
-# The self-hosted MCP_* servers. Single-endpoint repos (math/browser/
-# filesystem) register directly; the sub-mounted repos (ml/data/office/docs)
-# have no single unified endpoint, so each sub-server under <BASE>/<name>/mcp
-# is registered as its own named server ("ml-basic", "data-workspace", etc).
+# The self-hosted MCP_* servers, one endpoint each. Math/browser/filesystem
+# always had one; ml/data/office/docs serve every tier as domain tools at
+# <BASE>/mcp ("data" lists 8 tools where its seven tiers listed 69). A restarted
+# (not recreated) container still carries the per-tier names ("data-basic",
+# "office-xlsx-new", ...) from an older boot, so those are dropped first.
+if [ -f "$HOME/.claude.json" ]; then
+    _tmp=$(mktemp)
+    if jq 'if .mcpServers then .mcpServers |= with_entries(select(.key | test("^(ml|data|office|docs)-") | not)) else . end' \
+        "$HOME/.claude.json" > "$_tmp"; then
+        mv "$_tmp" "$HOME/.claude.json"
+    else
+        rm -f "$_tmp"
+    fi
+fi
 [ -n "$MATH_MCP_URL" ] && [ -n "$MATH_MCP_TOKEN" ] && _mcp_register math "$MATH_MCP_URL" "$MATH_MCP_TOKEN"
 [ -n "$BROWSER_MCP_URL" ] && [ -n "$BROWSER_MCP_TOKEN" ] && _mcp_register browser "$BROWSER_MCP_URL" "$BROWSER_MCP_TOKEN"
 [ -n "$FS_MCP_URL" ] && [ -n "$FS_MCP_TOKEN" ] && _mcp_register filesystem "$FS_MCP_URL" "$FS_MCP_TOKEN"
-
-if [ -n "$ML_MCP_BASE_URL" ] && [ -n "$ML_MCP_TOKEN" ]; then
-    for t in basic medium advanced; do
-        _mcp_register "ml-$t" "$ML_MCP_BASE_URL/$t/mcp" "$ML_MCP_TOKEN"
-    done
-fi
-if [ -n "$DATA_MCP_BASE_URL" ] && [ -n "$DATA_MCP_TOKEN" ]; then
-    for s in basic medium statistics transform visual workspace ingest; do
-        _mcp_register "data-$s" "$DATA_MCP_BASE_URL/$s/mcp" "$DATA_MCP_TOKEN"
-    done
-fi
-if [ -n "$OFFICE_MCP_BASE_URL" ] && [ -n "$OFFICE_MCP_TOKEN" ]; then
-    for s in docx-basic docx-tables docx-layout docx-new xlsx-basic xlsx-formulas xlsx-charts xlsx-new pptx-basic pptx-design pptx-new; do
-        _mcp_register "office-$s" "$OFFICE_MCP_BASE_URL/$s/mcp" "$OFFICE_MCP_TOKEN"
-    done
-fi
-if [ -n "$DOCS_MCP_BASE_URL" ] && [ -n "$DOCS_MCP_TOKEN" ]; then
-    for s in read edit; do
-        _mcp_register "docs-$s" "$DOCS_MCP_BASE_URL/$s/mcp" "$DOCS_MCP_TOKEN"
-    done
-fi
+[ -n "$ML_MCP_BASE_URL" ] && [ -n "$ML_MCP_TOKEN" ] && _mcp_register ml "$ML_MCP_BASE_URL/mcp" "$ML_MCP_TOKEN"
+[ -n "$DATA_MCP_BASE_URL" ] && [ -n "$DATA_MCP_TOKEN" ] && _mcp_register data "$DATA_MCP_BASE_URL/mcp" "$DATA_MCP_TOKEN"
+[ -n "$OFFICE_MCP_BASE_URL" ] && [ -n "$OFFICE_MCP_TOKEN" ] && _mcp_register office "$OFFICE_MCP_BASE_URL/mcp" "$OFFICE_MCP_TOKEN"
+[ -n "$DOCS_MCP_BASE_URL" ] && [ -n "$DOCS_MCP_TOKEN" ] && _mcp_register docs "$DOCS_MCP_BASE_URL/mcp" "$DOCS_MCP_TOKEN"
 
 # Pre-accept the first-run dialogs (onboarding, "trust this folder", and the
 # Bypass Permissions warning) so a freshly-recreated container drops straight
