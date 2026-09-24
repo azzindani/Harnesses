@@ -165,8 +165,34 @@ _mcp_register() {  # name url token(optional)
 }
 
 [ -n "$FOLIO_MCP_URL" ] && [ -n "$FOLIO_MCP_TOKEN" ] && _mcp_register folio "$FOLIO_MCP_URL" "$FOLIO_MCP_TOKEN"
-# Pipeline (/root/Pipeline, Rust) — one endpoint, bearer = its PIPELINE_TOKEN.
-[ -n "$PIPELINE_MCP_URL" ] && [ -n "$PIPELINE_MCP_TOKEN" ] && _mcp_register pipeline "$PIPELINE_MCP_URL" "$PIPELINE_MCP_TOKEN"
+# Pipeline (/root/Pipeline, Rust).  The binary baked in from PIPELINE_MCP_IMAGE
+# wins: over stdio it works on /workspace with no capability gate.  The remote
+# endpoint is only a fallback -- it runs PIPELINE_REMOTE_MODE=read_only and on
+# its own /work, so every write or run through it is refused.  Pipeline roots
+# itself at its cwd (the session's), or at PIPELINE_PROJECT when that names a
+# directory: every call reads pipeline.yaml from that root.
+claude mcp remove --scope user pipeline >/dev/null 2>&1 || true
+if command -v pipeline >/dev/null 2>&1; then
+    if _mcp_disabled pipeline; then
+        echo "MCP: skipped 'pipeline' (MCP_DISABLED)"
+    else
+        set -- mcp --transport stdio
+        if [ -n "$PIPELINE_PROJECT" ]; then
+            if [ -d "$PIPELINE_PROJECT" ]; then
+                set -- "$@" --project "$PIPELINE_PROJECT"
+            else
+                echo "MCP: WARNING PIPELINE_PROJECT '$PIPELINE_PROJECT' is not a directory; pipeline follows the session cwd"
+            fi
+        fi
+        if claude mcp add --scope user pipeline -- pipeline "$@" >/dev/null 2>&1; then
+            echo "MCP: registered 'pipeline' -> stdio $(pipeline --version 2>/dev/null) ($*)"
+        else
+            echo "MCP: WARNING failed to register 'pipeline'"
+        fi
+    fi
+elif [ -n "$PIPELINE_MCP_URL" ] && [ -n "$PIPELINE_MCP_TOKEN" ]; then
+    _mcp_register pipeline "$PIPELINE_MCP_URL" "$PIPELINE_MCP_TOKEN"
+fi
 # Web search/fetch (DuckDuckGo sidecar) — no auth header.
 [ -n "$WEB_MCP_URL" ] && _mcp_register web "$WEB_MCP_URL"
 
