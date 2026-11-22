@@ -68,7 +68,7 @@ Only Claude Code and OpenCode run day to day; the rest are stopped (not removed)
 ```
 .env.example              # every provider block + all tunables, no secrets — keep in sync with docker-compose.yml
 docker-compose.yml        # the 11 CLI harness-* gated behind the `on-demand` profile (harness-base built first); harness-files is always-on
-Makefile                  # tokens, build, up/down, router-reload (targets the external Caddy), validate
+Makefile                  # tokens, build, up/down, validate
 auth/server.py            # JWT gate + container lifecycle + free-model proxy — the one always-on brain
 scripts/generate-tokens.py
 scripts/test-all-harnesses.sh
@@ -101,7 +101,7 @@ Every MCP-capable harness (`claude`, `opencode`, `crush`, `qwencode`, `codex`, `
 - **Multi-session is same-container, not per-slug containers.** If you're touching `auth/server.py`'s dynamic-session logic or `caddy-snippet.txt`, remember the routing target is `X-Harness-Upstream` (a container:port the auth service names), not something derivable from the hostname alone.
 - **Don't add a static per-hostname Caddy block alongside the wildcard block** in `caddy-snippet.txt` — an exact-hostname site and a wildcard site covering it are a policy conflict in Caddy's automatic HTTPS and this has broken cert resolution for every harness subdomain before.
 - **Idle-stopping a container kills its tmux server**, so every session in it (base `main` + every dynamic slug) dies; only what the CLI wrote under `history/` survives. The answer is NOT to stop sweeping — the operator wants containers asleep (idle opencode ≈ 1.1GB + a few % CPU on a 15GB box, claude ≈ 460MB), and `IDLE_EXEMPT` is empty on purpose. Instead, `claude`'s and `opencode`'s entrypoints launch `main` with `--continue` (with a `|| <plain launch>` fallback for the first-ever boot), so waking resumes the conversation. Verified end to end: `docker stop` → visit → 200 in ~63s → the prior conversation is back in the pane. Do not add `--continue` to `HARNESS_LAUNCH_CMD` (dynamic slugs) — they share one `/workspace` and would all resume the same conversation. So slugs come back blank after a stop, and a phone drops its tab connection when locked: at 30 minutes a stop landed on an agent still working with no tab open. The operator's `.env` now uses `IDLE_TIMEOUT_MIN=720` (12h), and `_note_model_request` counts a harness's own proxy calls as use (by source IP, mapped each sweep). The operator wants claude genuinely stopped when idle, not standing by, with opening its link the only thing that starts it — so it stays out of `IDLE_EXEMPT` even though a stopped container is what `docker container prune` deletes (`_recreate_container` covers that). `IDLE_EXEMPT` holds only opencode, whose container also hosts a dev stack; its RAM comes back through `SESSION_IDLE_HOURS` instead.
-- **Editing a bind-mounted single file doesn't reach the running container.** `Caddyfile`, `.env`, and `harnesses/base/ttyd-kbfix.html` are all mounted as individual files. Any edit that replaces the file (which is what the Edit/Write tools do) leaves the container bound to the old inode: `caddy reload` will keep serving the previous config and swear it's valid. Recreate/restart the container so the mount re-resolves — for the shared Caddy that means `docker compose restart caddy` in `the reverse proxy`, not `make router-reload`.
+- **Editing a bind-mounted single file doesn't reach the running container.** `Caddyfile`, `.env`, and `harnesses/base/ttyd-kbfix.html` are all mounted as individual files. Any edit that replaces the file (which is what the Edit/Write tools do) leaves the container bound to the old inode: `caddy reload` will keep serving the previous config and swear it's valid. Recreate/restart the container so the mount re-resolves — for a shared Caddy that means restarting its container, not a `caddy reload`.
 - **`harnesses/base/ttyd-wrapper.sh` caches its generated index at `/run/ttyd-kbfix-index.html`**, which survives `docker restart` (writable layer, not tmpfs). It now rebuilds when the snippet is newer, but that check only exists in a rebuilt base image — after editing `ttyd-kbfix.html` on a stack running an older image, `rm -f /run/ttyd-kbfix-index.html` inside the container before restarting it.
 - **Claude's harness needs >60s to boot** (its entrypoint registers each MCP server, ~26 before the one-endpoint change and ~10 after, before it execs ttyd), which is why `COLD_START_TIMEOUT_S` defaults to 120. Lowering it back to 30 makes the first visit after an idle-stop 504 on a container that was coming up fine.
 - **A throwaway `claude` session inside `harness-claude` is a real session.**
@@ -131,8 +131,7 @@ docker compose up -d harness-aider
 ./scripts/test-all-harnesses.sh aider crush     # subset
 STOP_AFTER=1 ./scripts/test-all-harnesses.sh    # stop each when done
 
-# Reload the external Caddy after editing caddy-snippet.txt into it
-make router-reload
+# After adding caddy-snippet.txt to your reverse proxy's config, reload that proxy.
 ```
 
 ## Troubleshooting

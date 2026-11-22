@@ -1,4 +1,4 @@
-.PHONY: help tokens build pull up down logs restart router-up router-reload validate
+.PHONY: help tokens build pull up down logs restart validate
 
 SHELL := /bin/bash
 ENV    := .env
@@ -33,12 +33,6 @@ logs: ## Tail auth + harness logs
 	docker compose logs -f --tail=100
 
 restart: down up ## Restart auth service
-
-router-up: ## Apply reverse-proxy compose (after editing its networks list)
-	cd the reverse proxy && docker compose up -d
-
-router-reload: ## Hot-reload Caddy without restarting the container
-	docker exec reverse-proxy caddy reload --config /etc/caddy/Caddyfile
 
 validate: ## Smoke-test JWT issuance + auth /verify
 	@set -a; source $(ENV); set +a; \

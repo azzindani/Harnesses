@@ -47,7 +47,7 @@
 #      which is what keeps an in-use login from ever expiring.
 #
 # Reload after editing:
-#   docker exec reverse-proxy caddy reload --config /etc/caddy/Caddyfile
+#   docker exec <your proxy container> caddy reload --config /etc/caddy/Caddyfile
 #
 # ...but if the Caddyfile is bind-mounted as a SINGLE FILE (the usual
 # `./Caddyfile:/etc/caddy/Caddyfile:ro`), an editor that replaces the file
