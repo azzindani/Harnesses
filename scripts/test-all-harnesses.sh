@@ -4,7 +4,7 @@
 # For each harness this script:
 #   1. mints a 30-day JWT via scripts/generate-tokens.py
 #   2. POSTs it to harnesses-auth /verify (which wakes the container)
-#   3. polls the harness's listen port from inside reverse-proxy's network view
+#   3. polls the harness's listen port from inside the reverse proxy's network view (PROXY_CONTAINER)
 #   4. from inside the harness container, curls the configured provider /models
 #      using the env vars compose has already wired
 #   5. checks that the expected CLI / web-app process is alive
@@ -20,6 +20,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 set -a; source .env; set +a
+: "${PROXY_CONTAINER:?set PROXY_CONTAINER in .env: the reverse proxy container that can reach the harnesses}"
 
 # port + process pattern per harness.
 declare -A PORT=(
@@ -80,7 +81,7 @@ for h in "${TARGETS[@]}"; do
     if [ "$wake" = "PASS" ]; then
         port_status=FAIL
         for _ in $(seq 1 30); do
-            pcode=$(docker exec reverse-proxy wget -qSO /dev/null --tries=1 --timeout=2 \
+            pcode=$(docker exec "$PROXY_CONTAINER" wget -qSO /dev/null --tries=1 --timeout=2 \
                 "http://harness-${h}:${port}/" 2>&1 | awk '/^  HTTP/ {print $2; exit}')
             if [ -n "$pcode" ] && [ "$pcode" -ge 200 ] && [ "$pcode" -lt 500 ]; then
                 port_status=PASS; break

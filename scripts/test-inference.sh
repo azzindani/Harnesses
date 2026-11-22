@@ -18,6 +18,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 set -a; source .env; set +a
+: "${PROXY_CONTAINER:?set PROXY_CONTAINER in .env: the reverse proxy container that can reach the harnesses}"
 
 PROMPT="Reply with exactly the four characters PONG and nothing else."
 
@@ -110,7 +111,7 @@ for h in "${TARGETS[@]}"; do
     if [[ "$cmd" == WEB:* ]]; then
         port="${cmd#WEB:}"
         start=$(date +%s)
-        wcode=$(docker exec reverse-proxy wget -qSO /dev/null --tries=1 --timeout=10 \
+        wcode=$(docker exec "$PROXY_CONTAINER" wget -qSO /dev/null --tries=1 --timeout=10 \
             "http://harness-${h}:${port}/" 2>&1 | awk '/^  HTTP/ {print $2; exit}')
         elapsed=$(( $(date +%s) - start ))
         if [ -n "$wcode" ] && [ "$wcode" -ge 200 ] && [ "$wcode" -lt 500 ]; then
